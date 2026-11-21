@@ -1,0 +1,123 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Jewel of Intellect Academy — Online Enrollment Portal</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <!-- TOP INSTITUTIONAL BANNER (HONOR * SERVICE * PATRIOTISM) -->
+  <header class="top-motto-bar">
+    <div class="motto-center" onclick="window.JOIApp && window.JOIApp.navigate('landing')" style="cursor: pointer;" title="Return to Portal Gateway">
+      <span class="motto-word">HONOR</span>
+      <img src="/assets/star.png" alt="Gold Star" class="motto-star" />
+      <span class="motto-word">SERVICE</span>
+      <img src="/assets/star.png" alt="Gold Star" class="motto-star" />
+      <span class="motto-word">PATRIOTISM</span>
+    </div>
+  </header>
+
+  <!-- TOAST NOTIFICATION CONTAINER -->
+  <div id="toast-container" class="toast-container"></div>
+
+  <!-- MAIN APPLICATION VIEWPORT -->
+  <main id="app-root"></main>
+
+  <script>
+    window.JOI_FALLBACK_COURSES = [
+      { lngCourseID: 1, strCourseCode: 'BSCOE', strCourseDescription: 'Bachelor of Science in Computer Engineering' },
+      { lngCourseID: 2, strCourseCode: 'BSCS', strCourseDescription: 'Bachelor of Science in Computer Science' },
+      { lngCourseID: 3, strCourseCode: 'BSIT', strCourseDescription: 'Bachelor of Science in Information Technology' },
+      { lngCourseID: 4, strCourseCode: 'BSBA-FM', strCourseDescription: 'Bachelor of Science in Business Administration (Financial Management)' },
+      { lngCourseID: 5, strCourseCode: 'BSECE', strCourseDescription: 'Bachelor of Science in Electronics Engineering' },
+      { lngCourseID: 6, strCourseCode: 'BSIE', strCourseDescription: 'Bachelor of Science in Industrial Engineering' },
+      { lngCourseID: 7, strCourseCode: 'BSARCH', strCourseDescription: 'Bachelor of Science in Architecture' },
+      { lngCourseID: 8, strCourseCode: 'BSA', strCourseDescription: 'Bachelor of Science in Accountancy' },
+      { lngCourseID: 9, strCourseCode: 'MD', strCourseDescription: 'Doctor of Medicine (School of Medicine)' },
+      { lngCourseID: 10, strCourseCode: 'JD', strCourseDescription: 'Juris Doctor / Law (Institute of Law and Justice)' },
+      { lngCourseID: 11, strCourseCode: 'BSN', strCourseDescription: 'Bachelor of Science in Nursing' },
+      { lngCourseID: 12, strCourseCode: 'BSM', strCourseDescription: 'Bachelor of Science in Midwifery' },
+      { lngCourseID: 13, strCourseCode: 'BSMT', strCourseDescription: 'Bachelor of Science in Medical Technology (Medical Laboratory Science)' },
+      { lngCourseID: 14, strCourseCode: 'BSPHARM', strCourseDescription: 'Bachelor of Science in Pharmacy' },
+      { lngCourseID: 15, strCourseCode: 'BSPT', strCourseDescription: 'Bachelor of Science in Physical Therapy' },
+      { lngCourseID: 16, strCourseCode: 'BSOT', strCourseDescription: 'Bachelor of Science in Occupational Therapy' },
+      { lngCourseID: 17, strCourseCode: 'BSRT', strCourseDescription: 'Bachelor of Science in Respiratory Therapy' },
+      { lngCourseID: 18, strCourseCode: 'BSRADTECH', strCourseDescription: 'Bachelor of Science in Radiologic Technology' },
+      { lngCourseID: 19, strCourseCode: 'BSDENT', strCourseDescription: 'Bachelor of Science in Dentistry / Dental Technology' },
+      { lngCourseID: 20, strCourseCode: 'BSND', strCourseDescription: 'Bachelor of Science in Nutrition and Dietetics' },
+      { lngCourseID: 21, strCourseCode: 'BSOPT', strCourseDescription: 'Bachelor of Science in Optometry' },
+      { lngCourseID: 22, strCourseCode: 'BSAT', strCourseDescription: 'Bachelor of Science in Accounting Technology' },
+      { lngCourseID: 23, strCourseCode: 'BSBA-MM', strCourseDescription: 'Bachelor of Science in Business Administration (Marketing Management)' },
+      { lngCourseID: 24, strCourseCode: 'BSBA-OM', strCourseDescription: 'Bachelor of Science in Business Administration (Operations Management)' },
+      { lngCourseID: 25, strCourseCode: 'BSBA-HRDM', strCourseDescription: 'Bachelor of Science in Business Administration (Human Resource Development Management)' },
+      { lngCourseID: 26, strCourseCode: 'BSBA-LM', strCourseDescription: 'Bachelor of Science in Business Administration (Legal Management)' },
+      { lngCourseID: 27, strCourseCode: 'BSBA-FMA', strCourseDescription: 'Bachelor of Science in Business Administration (Financial Managerial Accounting)' },
+      { lngCourseID: 28, strCourseCode: 'BSCA', strCourseDescription: 'Bachelor of Science in Customs Administration' },
+      { lngCourseID: 29, strCourseCode: 'BSREM', strCourseDescription: 'Bachelor of Science in Real Estate Management' },
+      { lngCourseID: 30, strCourseCode: 'MBA', strCourseDescription: 'Master in Business Administration' },
+      { lngCourseID: 31, strCourseCode: 'BSCRIM', strCourseDescription: 'Bachelor of Science in Criminology' },
+      { lngCourseID: 32, strCourseCode: 'MSCJ-CRIM', strCourseDescription: 'Master of Science in Criminal Justice - Criminology' },
+      { lngCourseID: 33, strCourseCode: 'BSHM', strCourseDescription: 'Bachelor of Science in Hospitality Management (Hotel and Restaurant Management)' },
+      { lngCourseID: 34, strCourseCode: 'BSTM', strCourseDescription: 'Bachelor of Science in Tourism Management' },
+      { lngCourseID: 35, strCourseCode: 'BSPSYCH', strCourseDescription: 'Bachelor of Science in Psychology' },
+      { lngCourseID: 36, strCourseCode: 'BSBIO', strCourseDescription: 'Bachelor of Science in Biology' },
+      { lngCourseID: 37, strCourseCode: 'AB-COMM', strCourseDescription: 'AB in Communication' },
+      { lngCourseID: 38, strCourseCode: 'AB-POLS', strCourseDescription: 'AB in Political Science' },
+      { lngCourseID: 39, strCourseCode: 'BEED', strCourseDescription: 'Bachelor of Elementary Education' },
+      { lngCourseID: 40, strCourseCode: 'BSED', strCourseDescription: 'Bachelor of Secondary Education' },
+      { lngCourseID: 41, strCourseCode: 'PHD-CJ', strCourseDescription: 'PhD in Criminal Justice' },
+      { lngCourseID: 42, strCourseCode: 'PHD-EDM', strCourseDescription: 'PhD in Educational Management' },
+      { lngCourseID: 43, strCourseCode: 'MAED-ENG', strCourseDescription: 'Master of Arts in Education (English)' },
+      { lngCourseID: 44, strCourseCode: 'MAED-MATH', strCourseDescription: 'Master of Arts in Education (Mathematics)' },
+      { lngCourseID: 45, strCourseCode: 'MAED-SCI', strCourseDescription: 'Master of Arts in Education (Science)' },
+      { lngCourseID: 46, strCourseCode: 'MAED-GC', strCourseDescription: 'Master of Arts in Education (Guidance & Counseling)' },
+      { lngCourseID: 47, strCourseCode: 'MAED-GEN', strCourseDescription: 'Master of Arts in Education (Other Specializations)' },
+      { lngCourseID: 48, strCourseCode: 'MAN', strCourseDescription: 'Master of Arts in Nursing' },
+      { lngCourseID: 49, strCourseCode: 'MHA', strCourseDescription: 'Master in Hospital Administration' },
+      { lngCourseID: 50, strCourseCode: 'MPA', strCourseDescription: 'Master in Public Administration' },
+      { lngCourseID: 51, strCourseCode: 'ETEEAP-BSCRIM', strCourseDescription: 'BS in Criminology (ETEEAP)' },
+      { lngCourseID: 52, strCourseCode: 'ETEEAP-BSBA-MM', strCourseDescription: 'BS in Business Administration - Marketing Management (ETEEAP)' },
+      { lngCourseID: 53, strCourseCode: 'ETEEAP-BSBA-FM', strCourseDescription: 'BS in Business Administration - Financial Management (ETEEAP)' },
+      { lngCourseID: 54, strCourseCode: 'ETEEAP-BSBA-OM', strCourseDescription: 'BS in Business Administration - Operations Management (ETEEAP)' }
+    ];
+  </script>
+
+  <script>
+    document.addEventListener('input', function (e) {
+      if (e.target.classList.contains('tel-only')) {
+        e.target.value = e.target.value.replace(/\D/g, '');
+        if (window.JOIApp) {
+          window.JOIApp.updateDraft(e.target.dataset.section, e.target.dataset.key, e.target.value);
+        }
+      }
+      if (e.target.classList.contains('lrn-only')) {
+        e.target.value = e.target.value.replace(/\D/g, '');
+        if (window.JOIApp) {
+          window.JOIApp.updateDraft(e.target.dataset.section, e.target.dataset.key, e.target.value);
+        }
+      }
+      if (e.target.classList.contains('name-only')) {
+        e.target.value = e.target.value.replace(/[^a-zA-ZÀ-ÿ\s-]/g, '');
+        if (window.JOIApp) {
+          window.JOIApp.updateDraft(e.target.dataset.section, e.target.dataset.key, e.target.value);
+        }
+      }
+    });
+  </script>
+
+  <script src="app.js?v=3"></script>
+
+  <script>
+    window.JOIApp.toggleIntakePassword = function () {
+      const el = document.getElementById('intake-password-input');
+      if (!el) return;
+      const show = el.dataset.show === 'true';
+      el.type = show ? 'password' : 'text';
+      el.dataset.show = String(!show);
+      const btn = el.parentElement.querySelector('button');
+      if (btn) btn.textContent = show ? '🙈' : '👁';
+    };
+  </script>
+</body>
+</html>

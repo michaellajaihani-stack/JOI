@@ -1,0 +1,5 @@
+J.O.I/.env
+J.O.I/node_modules/
+J.O.I/*.db*
+J.O.I/backups/
+J.O.I/public/reference_index_items/
