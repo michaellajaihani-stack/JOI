@@ -1,0 +1,91 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Jewel of Intellect Academy — Online Enrollment Portal</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <!-- TOP INSTITUTIONAL BANNER (HONOR * SERVICE * PATRIOTISM) -->
+  <header class="top-motto-bar">
+    <div class="motto-center" onclick="window.JOIApp && window.JOIApp.navigate('landing')" style="cursor: pointer;" title="Return to Portal Gateway">
+      <span class="motto-word">HONOR</span>
+      <img src="/assets/star.png" alt="Gold Star" class="motto-star" />
+      <span class="motto-word">SERVICE</span>
+      <img src="/assets/star.png" alt="Gold Star" class="motto-star" />
+      <span class="motto-word">PATRIOTISM</span>
+    </div>
+  </header>
+
+  <!-- TOAST NOTIFICATION CONTAINER -->
+  <div id="toast-container" class="toast-container"></div>
+
+  <!-- MAIN APPLICATION VIEWPORT -->
+  <main id="app-root"></main>
+
+  <script>
+    window.JOI_FALLBACK_COURSES = [
+  // Tech & Engineering
+  { lngCourseID: 1, strCourseCode: 'BSCOE', strCourseDescription: 'Bachelor of Science in Computer Engineering' },
+  { lngCourseID: 2, strCourseCode: 'BSCS', strCourseDescription: 'Bachelor of Science in Computer Science' },
+  { lngCourseID: 3, strCourseCode: 'BSIT', strCourseDescription: 'Bachelor of Science in Information Technology' },
+  { lngCourseID: 6, strCourseCode: 'BSIE', strCourseDescription: 'Bachelor of Science in Industrial Engineering' },
+  { lngCourseID: 7, strCourseCode: 'BSARCH', strCourseDescription: 'Bachelor of Science in Architecture' },
+
+  // Business & Management
+  { lngCourseID: 4, strCourseCode: 'BSBA-FM', strCourseDescription: 'Bachelor of Science in Business Administration (Financial Management)' },
+  { lngCourseID: 8, strCourseCode: 'BSA', strCourseDescription: 'Bachelor of Science in Accountancy' },
+  { lngCourseID: 23, strCourseCode: 'BSBA-MM', strCourseDescription: 'Bachelor of Science in Business Administration (Marketing Management)' },
+  { lngCourseID: 33, strCourseCode: 'BSHM', strCourseDescription: 'Bachelor of Science in Hospitality Management (Hotel and Restaurant Management)' },
+
+  // Allied Health & Sciences
+  { lngCourseID: 11, strCourseCode: 'BSN', strCourseDescription: 'Bachelor of Science in Nursing' },
+  { lngCourseID: 13, strCourseCode: 'BSMT', strCourseDescription: 'Bachelor of Science in Medical Technology (Medical Laboratory Science)' },
+  { lngCourseID: 14, strCourseCode: 'BSPHARM', strCourseDescription: 'Bachelor of Science in Pharmacy' },
+  { lngCourseID: 35, strCourseCode: 'BSPSYCH', strCourseDescription: 'Bachelor of Science in Psychology' },
+
+  // Arts, Public Safety & Education
+  { lngCourseID: 31, strCourseCode: 'BSCRIM', strCourseDescription: 'Bachelor of Science in Criminology' },
+  { lngCourseID: 37, strCourseCode: 'AB-COMM', strCourseDescription: 'AB in Communication' }
+];
+  </script>
+
+  <script>
+    document.addEventListener('input', function (e) {
+      if (e.target.classList.contains('tel-only')) {
+        e.target.value = e.target.value.replace(/\D/g, '');
+        if (window.JOIApp) {
+          window.JOIApp.updateDraft(e.target.dataset.section, e.target.dataset.key, e.target.value);
+        }
+      }
+      if (e.target.classList.contains('lrn-only')) {
+        e.target.value = e.target.value.replace(/\D/g, '');
+        if (window.JOIApp) {
+          window.JOIApp.updateDraft(e.target.dataset.section, e.target.dataset.key, e.target.value);
+        }
+      }
+      if (e.target.classList.contains('name-only')) {
+        e.target.value = e.target.value.replace(/[^a-zA-ZÀ-ÿ\s-]/g, '');
+        if (window.JOIApp) {
+          window.JOIApp.updateDraft(e.target.dataset.section, e.target.dataset.key, e.target.value);
+        }
+      }
+    });
+  </script>
+
+  <script src="app.js?v=3"></script>
+
+  <script>
+    window.JOIApp.toggleIntakePassword = function () {
+      const el = document.getElementById('intake-password-input');
+      if (!el) return;
+      const show = el.dataset.show === 'true';
+      el.type = show ? 'password' : 'text';
+      el.dataset.show = String(!show);
+      const btn = el.parentElement.querySelector('button');
+      if (btn) btn.textContent = show ? '🙈' : '👁';
+    };
+  </script>
+</body>
+</html>
