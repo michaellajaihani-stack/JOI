@@ -276,41 +276,196 @@ async function getStudentFullBundle(studentId) {
   };
 }
 
-async function getStaffOverview() {
-  const [
-    studentRows,
-    courses,
-    sections,
-    loads,
-    documents,
-    payments,
-    notes,
-    contacts,
-    employeeRows,
-    positions,
-    contactTypes,
-    studentCourseLinks,
-    backups
-  ] = await Promise.all([
+const VALID_STAFF_ROLES = ['ADMIN', 'REGISTRAR', 'FINANCE', 'FACULTY'];
+
+const DEFAULT_SYSTEM_CONFIG = {
+  lngConfigID: 1,
+  strActiveSemester: '1st Semester AY 2026-2027',
+  curDefaultPerUnitFee: 1850,
+  curDefaultMiscFee: 6850,
+  ysnApplicationsOpen: 1,
+  strUpdatedBy: 'SYSTEM'
+};
+
+async function getSystemConfig() {
+  try {
+    const { data, error } = await supabase
+      .from('tblSystemConfig')
+      .select('*')
+      .eq('lngConfigID', 1)
+      .maybeSingle();
+    if (error || !data) return { ...DEFAULT_SYSTEM_CONFIG };
+    return data;
+  } catch {
+    return { ...DEFAULT_SYSTEM_CONFIG };
+  }
+}
+
+async function getStaffOverview(employee) {
+  const role = employee.strAccess;
+  if (!VALID_STAFF_ROLES.includes(role)) {
+    throw new HttpError(403, 'Unrecognized staff access role.');
+  }
+
+  const emptyOverview = {
+    students: [],
+    courses: [],
+    sections: [],
+    subjectLoads: [],
+    documents: [],
+    payments: [],
+    promissoryNotes: [],
+    contacts: [],
+    employees: [],
+    facultyList: [],
+    positions: [],
+    contactTypes: [],
+    studentCourseLinks: [],
+    backups: [],
+    systemConfig: null
+  };
+
+  if (role === 'FINANCE') {
+    const [studentRows, payments, notes, employeeRows] = await Promise.all([
+      query(
+        supabase.from('tblStudentInformation')
+          .select('lngStudentID,strStudentNo,strFirstName,strLastName,strEnrollmentStatus,curOutstandingBalance,curMiscFee,ysnHasINC')
+          .order('lngStudentID', { ascending: true })
+      ),
+      rows('tblPayments', 'lngPaymentID'),
+      rows('tblPromissoryNotes', 'lngNoteID'),
+      query(supabase.from('tblEmployees').select('lngEmpID,strEmpName').order('lngEmpID', { ascending: true }))
+    ]);
+    const studentById = indexBy(studentRows, 'lngStudentID');
+    const employeeById = indexBy(employeeRows, 'lngEmpID');
+
+    return {
+      ...emptyOverview,
+      students: studentRows,
+      payments: payments.map((payment) => {
+        const student = studentById.get(String(payment.lngStudentID)) || {};
+        return {
+          ...payment,
+          strStudentNo: student.strStudentNo,
+          strFirstName: student.strFirstName,
+          strLastName: student.strLastName,
+          strEnrollmentStatus: student.strEnrollmentStatus,
+          strVerifierName: employeeById.get(String(payment.lngVerifiedByEmpID))?.strEmpName || null
+        };
+      }).sort((a, b) => Number(a.strStatus !== 'Pending Verification') - Number(b.strStatus !== 'Pending Verification')),
+      promissoryNotes: notes.map((note) => {
+        const student = studentById.get(String(note.lngStudentID)) || {};
+        return {
+          ...note,
+          strStudentNo: student.strStudentNo,
+          strFirstName: student.strFirstName,
+          strLastName: student.strLastName,
+          strEnrollmentStatus: student.strEnrollmentStatus,
+          strLoggedByName: employeeById.get(String(note.lngLoggedByEmpID))?.strEmpName || null
+        };
+      }).sort((a, b) => Number(b.lngNoteID) - Number(a.lngNoteID))
+    };
+  }
+
+  if (role === 'FACULTY') {
+    const [assignedSections, courses] = await Promise.all([
+      query(
+        supabase.from('tblSubjectSections')
+          .select('*')
+          .eq('lngFacultyEmpID', employee.lngEmpID)
+          .order('lngSectionID', { ascending: true })
+      ),
+      rows('tblCourseList', 'lngCourseID')
+    ]);
+
+    const sectionIds = assignedSections.map((s) => s.lngSectionID);
+    const loads = sectionIds.length > 0
+      ? await query(
+          supabase.from('tblStudentSubjectLoad')
+            .select('*')
+            .in('lngSectionID', sectionIds)
+            .order('lngLoadID', { ascending: true })
+        )
+      : [];
+
+    const studentIds = [...new Set(loads.map((l) => l.lngStudentID))];
+    const studentRows = studentIds.length > 0
+      ? await query(
+          supabase.from('tblStudentInformation')
+            .select('lngStudentID,strStudentNo,strFirstName,strLastName,strEnrollmentStatus,ysnHasINC')
+            .in('lngStudentID', studentIds)
+        )
+      : [];
+
+    const studentById = indexBy(studentRows, 'lngStudentID');
+    const courseById = indexBy(courses, 'lngCourseID');
+    const enrichedSections = assignedSections.map((section) => ({
+      ...section,
+      strProfessorName: employee.strEmpName,
+      strCourseCode: courseById.get(String(section.lngCourseID))?.strCourseCode || null
+    }));
+    const enrichedSectionById = indexBy(enrichedSections, 'lngSectionID');
+
+    return {
+      ...emptyOverview,
+      courses,
+      sections: enrichedSections,
+      subjectLoads: loads.map((load) => {
+        const student = studentById.get(String(load.lngStudentID)) || {};
+        const section = enrichedSectionById.get(String(load.lngSectionID)) || {};
+        return {
+          ...load,
+          strStudentNo: student.strStudentNo,
+          strFirstName: student.strFirstName,
+          strLastName: student.strLastName,
+          strEnrollmentStatus: student.strEnrollmentStatus,
+          ysnHasINC: student.ysnHasINC,
+          strSubjectCode: section.strSubjectCode,
+          strSubjectTitle: section.strSubjectTitle,
+          strSectionName: section.strSectionName,
+          strSchedule: section.strSchedule,
+          strRoom: section.strRoom,
+          intUnits: section.intUnits,
+          lngFacultyEmpID: section.lngFacultyEmpID,
+          strProfessorName: section.strProfessorName
+        };
+      })
+    };
+  }
+
+  // REGISTRAR and ADMIN share academic/enrollment tables; only ADMIN loads employee accounts, payments, promissory notes, backups, and systemConfig
+  const basePromises = [
     rows('tblStudentInformation', 'lngStudentID'),
     rows('tblCourseList', 'lngCourseID'),
     rows('tblSubjectSections', 'lngSectionID'),
     rows('tblStudentSubjectLoad', 'lngLoadID'),
     rows('tblAdmissionDocuments', 'lngDocID'),
-    rows('tblPayments', 'lngPaymentID'),
-    rows('tblPromissoryNotes', 'lngNoteID'),
     rows('tblContacts', 'lngContactID'),
-    rows('tblEmployees', 'lngEmpID'),
-    rows('tblEmpJobPosition', 'lngEmpPositionID'),
     rows('tblContactType', 'lngContactTypeID'),
     rows('tblLINKStudent_Course', 'lngLinkID'),
-    rows('tblDatabaseBackups', 'lngBackupID')
-  ]);
+    role === 'ADMIN'
+      ? rows('tblEmployees', 'lngEmpID')
+      : query(supabase.from('tblEmployees').select('lngEmpID,strEmpName,strAccess,strDepartment,ysnActive').order('lngEmpID', { ascending: true }))
+  ];
+
+  const adminPromises = role === 'ADMIN'
+    ? [
+        rows('tblPayments', 'lngPaymentID'),
+        rows('tblPromissoryNotes', 'lngNoteID'),
+        rows('tblEmpJobPosition', 'lngEmpPositionID'),
+        rows('tblDatabaseBackups', 'lngBackupID'),
+        getSystemConfig()
+      ]
+    : [Promise.resolve([]), Promise.resolve([]), Promise.resolve([]), Promise.resolve([]), Promise.resolve(null)];
+
+  const [
+    [studentRows, courses, sections, loads, documents, contacts, contactTypes, studentCourseLinks, employeeRows],
+    [payments, notes, positions, backups, systemConfig]
+  ] = await Promise.all([Promise.all(basePromises), Promise.all(adminPromises)]);
 
   const studentById = indexBy(studentRows, 'lngStudentID');
   const employeeById = indexBy(employeeRows, 'lngEmpID');
   const courseById = indexBy(courses, 'lngCourseID');
-  const sectionById = indexBy(sections, 'lngSectionID');
   const typeById = indexBy(contactTypes, 'lngContactTypeID');
   const positionById = indexBy(positions, 'lngEmpPositionID');
   const linkByStudent = new Map();
@@ -330,14 +485,19 @@ async function getStaffOverview() {
       strCourseDescription: course?.strCourseDescription ?? null
     };
   });
-  const employeeSafeRows = employeeRows.map(cleanEmployee);
-  const enriched = await enrichSections(sections, employeeRows, courses);
-  const enrichedSectionById = indexBy(enriched, 'lngSectionID');
 
-  return {
+  const enrichedSections = await enrichSections(sections, employeeRows, courses);
+  const enrichedSectionById = indexBy(enrichedSections, 'lngSectionID');
+  const facultyList = employeeRows
+    .filter((emp) => emp.strAccess === 'FACULTY' && emp.ysnActive !== 0)
+    .map((emp) => ({ lngEmpID: emp.lngEmpID, strEmpName: emp.strEmpName, strDepartment: emp.strDepartment }));
+
+  const overview = {
+    ...emptyOverview,
     students,
     courses,
-    sections: enriched,
+    sections: enrichedSections,
+    facultyList,
     subjectLoads: loads.map((load) => {
       const student = studentById.get(String(load.lngStudentID)) || {};
       const section = enrichedSectionById.get(String(load.lngSectionID)) || {};
@@ -370,28 +530,6 @@ async function getStaffOverview() {
         strReviewerName: employeeById.get(String(document.lngReviewedByEmpID))?.strEmpName || null
       };
     }).sort((a, b) => Number(a.strStatus !== 'Pending Review') - Number(b.strStatus !== 'Pending Review')),
-    payments: payments.map((payment) => {
-      const student = studentById.get(String(payment.lngStudentID)) || {};
-      return {
-        ...payment,
-        strStudentNo: student.strStudentNo,
-        strFirstName: student.strFirstName,
-        strLastName: student.strLastName,
-        strEnrollmentStatus: student.strEnrollmentStatus,
-        strVerifierName: employeeById.get(String(payment.lngVerifiedByEmpID))?.strEmpName || null
-      };
-    }).sort((a, b) => Number(a.strStatus !== 'Pending Verification') - Number(b.strStatus !== 'Pending Verification')),
-    promissoryNotes: notes.map((note) => {
-      const student = studentById.get(String(note.lngStudentID)) || {};
-      return {
-        ...note,
-        strStudentNo: student.strStudentNo,
-        strFirstName: student.strFirstName,
-        strLastName: student.strLastName,
-        strEnrollmentStatus: student.strEnrollmentStatus,
-        strLoggedByName: employeeById.get(String(note.lngLoggedByEmpID))?.strEmpName || null
-      };
-    }).sort((a, b) => Number(b.lngNoteID) - Number(a.lngNoteID)),
     contacts: contacts.map((contact) => {
       const student = studentById.get(String(contact.lngStudentID)) || {};
       return {
@@ -403,94 +541,51 @@ async function getStaffOverview() {
         strEmpName: employeeById.get(String(contact.lngEmployeeID))?.strEmpName || null
       };
     }).sort((a, b) => Number(b.lngContactID) - Number(a.lngContactID)),
-    employees: employeeSafeRows.map((employee) => ({
-      ...employee,
-      strEmpPosition: positionById.get(String(employee.lngEmpPositionID))?.strEmpPosition || null
-    })),
-    positions,
     contactTypes,
-    studentCourseLinks,
-    backups: backups.sort((a, b) => Number(b.lngBackupID) - Number(a.lngBackupID))
+    studentCourseLinks
   };
-}
 
-function overviewForStaffRole(overview, employee) {
-  const hiddenAdminData = {
-    employees: [],
-    positions: [],
-    contactTypes: [],
-    studentCourseLinks: [],
-    backups: []
-  };
-  if (employee.strAccess === 'ADMIN') return overview;
-  if (employee.strAccess === 'REGISTRAR') {
-    return {
-      ...overview,
-      ...hiddenAdminData,
-      payments: [],
-      promissoryNotes: []
-    };
-  }
-  if (employee.strAccess === 'DEAN') {
-    return {
-      ...overview,
-      ...hiddenAdminData,
-      students: overview.students.map((student) => ({
-        lngStudentID: student.lngStudentID,
-        strStudentNo: student.strStudentNo,
-        strFirstName: student.strFirstName,
-        strLastName: student.strLastName,
-        strStudentType: student.strStudentType,
-        strCourseCode: student.strCourseCode,
-        ysnHasINC: student.ysnHasINC,
-        strINCSubject: student.strINCSubject,
-        dteINCIncurred: student.dteINCIncurred,
-        ysnDeanPreRegReleased: student.ysnDeanPreRegReleased,
-        strEnrollmentStatus: student.strEnrollmentStatus
-      })),
-      documents: [],
-      payments: [],
-      promissoryNotes: [],
-      contacts: []
-    };
-  }
-  if (employee.strAccess === 'FINANCE') {
-    return {
-      ...overview,
-      ...hiddenAdminData,
-      students: overview.students.map((student) => ({
-        lngStudentID: student.lngStudentID,
+  if (role === 'ADMIN') {
+    overview.payments = payments.map((payment) => {
+      const student = studentById.get(String(payment.lngStudentID)) || {};
+      return {
+        ...payment,
         strStudentNo: student.strStudentNo,
         strFirstName: student.strFirstName,
         strLastName: student.strLastName,
         strEnrollmentStatus: student.strEnrollmentStatus,
-        curOutstandingBalance: student.curOutstandingBalance
-      })),
-      sections: [],
-      subjectLoads: [],
-      documents: [],
-      contacts: []
-    };
+        strVerifierName: employeeById.get(String(payment.lngVerifiedByEmpID))?.strEmpName || null
+      };
+    }).sort((a, b) => Number(a.strStatus !== 'Pending Verification') - Number(b.strStatus !== 'Pending Verification'));
+    overview.promissoryNotes = notes.map((note) => {
+      const student = studentById.get(String(note.lngStudentID)) || {};
+      return {
+        ...note,
+        strStudentNo: student.strStudentNo,
+        strFirstName: student.strFirstName,
+        strLastName: student.strLastName,
+        strEnrollmentStatus: student.strEnrollmentStatus,
+        strLoggedByName: employeeById.get(String(note.lngLoggedByEmpID))?.strEmpName || null
+      };
+    }).sort((a, b) => Number(b.lngNoteID) - Number(a.lngNoteID));
+    overview.employees = employeeRows.map(cleanEmployee).map((emp) => ({
+      ...emp,
+      strEmpPosition: positionById.get(String(emp.lngEmpPositionID))?.strEmpPosition || null
+    }));
+    overview.positions = positions;
+    overview.backups = backups.sort((a, b) => Number(b.lngBackupID) - Number(a.lngBackupID));
+    overview.systemConfig = systemConfig;
   }
-  if (employee.strAccess === 'FACULTY') {
-    const assignedSections = overview.sections.filter(
-      (section) => Number(section.lngFacultyEmpID) === Number(employee.lngEmpID)
-    );
-    const assignedSectionIds = new Set(assignedSections.map((section) => String(section.lngSectionID)));
-    return {
-      ...overview,
-      ...hiddenAdminData,
-      students: [],
-      sections: assignedSections,
-      subjectLoads: overview.subjectLoads.filter((load) => assignedSectionIds.has(String(load.lngSectionID))),
-      documents: [],
-      payments: [],
-      promissoryNotes: [],
-      contacts: [],
-      studentCourseLinks: []
-    };
+
+  return overview;
+}
+
+function overviewForStaffRole(overview, employee) {
+  // Defense-in-depth wrapper; getStaffOverview already performs least-privilege queries.
+  if (!VALID_STAFF_ROLES.includes(employee.strAccess)) {
+    throw new HttpError(403, 'Unrecognized staff access role.');
   }
-  throw new HttpError(403, 'Unrecognized staff access role.');
+  return overview;
 }
 
 async function getPrincipal(req) {
@@ -516,6 +611,12 @@ async function getPrincipal(req) {
     };
   }
   if (employeeResult) {
+    if (employeeResult.ysnActive === 0) {
+      throw new HttpError(403, 'This employee account has been deactivated. Contact the System Administrator.');
+    }
+    if (!VALID_STAFF_ROLES.includes(employeeResult.strAccess)) {
+      throw new HttpError(403, 'Unrecognized staff access role.');
+    }
     return {
       userId,
       type: 'staff',
@@ -556,13 +657,49 @@ async function studentByIdentifier(identifier) {
   ) || null;
 }
 
-async function staffByIdentifier(identifier) {
+function empCodePrefix(accessRole) {
+  const map = { ADMIN: 'ADM', REGISTRAR: 'REG', FINANCE: 'FIN', FACULTY: 'FAC' };
+  return map[String(accessRole || '').toUpperCase()] || 'EMP';
+}
+
+function maskEmployeeName(name) {
+  return String(name || '')
+    .split(/\s+/)
+    .filter(Boolean)
+    .map((part) => (part.length <= 2 ? part[0] + '*' : part[0] + '*'.repeat(Math.min(4, part.length - 1))))
+    .join(' ');
+}
+
+async function employeeByCode(empCode) {
   const candidates = await rows('tblEmployees', 'lngEmpID');
-  const value = String(identifier).trim().toLocaleLowerCase();
-  return candidates.find((candidate) =>
-    [candidate.strEmpCode, candidate.strEmpName, candidate.strAccess, candidate.strEmpEmail]
-      .some((field) => String(field || '').toLocaleLowerCase() === value)
-  ) || null;
+  const value = String(empCode || '').trim().toLocaleLowerCase();
+  return candidates.find((candidate) => String(candidate.strEmpCode || '').trim().toLocaleLowerCase() === value) || null;
+}
+
+async function verifyEmployee(req, res) {
+  const { empCode } = await parseBody(req);
+  if (!empCode || !String(empCode).trim()) {
+    throw new HttpError(400, 'Please enter your Employee ID / Code.');
+  }
+  const employee = await employeeByCode(empCode);
+  if (!employee) {
+    throw new HttpError(404, 'Employee ID / Code not found in the J.O.I directory.');
+  }
+  if (employee.ysnActive === 0) {
+    throw new HttpError(403, 'This Employee ID has been deactivated. Please contact the System Administrator.');
+  }
+  if (!VALID_STAFF_ROLES.includes(employee.strAccess)) {
+    throw new HttpError(403, 'This Employee ID does not have a valid staff access role.');
+  }
+  const position = await one('tblEmpJobPosition', 'lngEmpPositionID', employee.lngEmpPositionID);
+  return sendJson(res, 200, {
+    verified: true,
+    empCode: employee.strEmpCode,
+    maskedName: maskEmployeeName(employee.strEmpName),
+    role: employee.strAccess,
+    department: employee.strDepartment || '',
+    position: position?.strEmpPosition || ''
+  });
 }
 
 async function signIn(email, password) {
@@ -583,31 +720,26 @@ async function attachAuthUser(table, idColumn, record, userId) {
 }
 
 async function login(req, res) {
-  const { mode, identifier, password } = await parseBody(req);
-  if (!identifier || !password) {
-    throw new HttpError(400, 'Please enter both identifier/username and password.');
-  }
-
+  const { mode, identifier, empCode, email: staffEmailInput, password } = await parseBody(req);
   const isStudent = mode === 'applicant' || mode === 'student';
-  if (!isStudent && mode !== 'staff') {
-    throw new HttpError(400, 'Unsupported authentication mode.');
-  }
-  const profile = isStudent
-    ? await studentByIdentifier(identifier)
-    : await staffByIdentifier(identifier);
-  if (!profile) throw new HttpError(401, 'Invalid login identifier or password.');
-
-  const email = isStudent ? profile['hypE-mailAddress'] : profile.strEmpEmail;
-  if (!email) {
-    throw new HttpError(409, 'This profile needs an email address before it can be linked to Supabase Auth.');
-  }
-  const { data } = await signIn(email, password);
-  const confirmedEmail = String(data.user.email || '').toLocaleLowerCase();
-  if (confirmedEmail !== String(email).toLocaleLowerCase()) {
-    throw new HttpError(403, 'The Supabase Auth email does not match this profile.');
-  }
 
   if (isStudent) {
+    if (!identifier || !password) {
+      throw new HttpError(400, 'Please enter both identifier/username and password.');
+    }
+    const profile = await studentByIdentifier(identifier);
+    if (!profile) throw new HttpError(401, 'Invalid login identifier or password.');
+
+    const email = profile['hypE-mailAddress'];
+    if (!email) {
+      throw new HttpError(409, 'This profile needs an email address before it can be linked to Supabase Auth.');
+    }
+    const { data } = await signIn(email, password);
+    const confirmedEmail = String(data.user.email || '').toLocaleLowerCase();
+    if (confirmedEmail !== String(email).toLocaleLowerCase()) {
+      throw new HttpError(403, 'The Supabase Auth email does not match this profile.');
+    }
+
     await attachAuthUser('tblStudentInformation', 'lngStudentID', profile, data.user.id);
     const role = profile.strStudentType === 'Applicant' ? 'APPLICANT' : 'STUDENT';
     return sendJson(res, 200, {
@@ -621,7 +753,44 @@ async function login(req, res) {
     });
   }
 
+  if (mode !== 'staff') {
+    throw new HttpError(400, 'Unsupported authentication mode.');
+  }
+
+  if (!empCode || !staffEmailInput || !password) {
+    throw new HttpError(400, 'Employee ID, Email Address, and Password are all required for School Access.');
+  }
+
+  const profile = await employeeByCode(empCode);
+  if (!profile) {
+    throw new HttpError(401, 'Invalid Employee ID / Code.');
+  }
+  if (profile.ysnActive === 0) {
+    throw new HttpError(403, 'This employee account has been deactivated.');
+  }
+  if (!VALID_STAFF_ROLES.includes(profile.strAccess)) {
+    throw new HttpError(403, 'Unrecognized staff access role.');
+  }
+
+  const profileEmail = String(profile.strEmpEmail || '').trim();
+  if (!profileEmail) {
+    throw new HttpError(409, 'This employee profile needs an email address before it can be linked to Supabase Auth.');
+  }
+  if (profileEmail.toLocaleLowerCase() !== String(staffEmailInput).trim().toLocaleLowerCase()) {
+    throw new HttpError(403, 'Credential mismatch: the entered email does not match this Employee ID.');
+  }
+
+  const { data } = await signIn(profileEmail, password);
+  const confirmedEmail = String(data.user.email || '').toLocaleLowerCase();
+  if (confirmedEmail !== profileEmail.toLocaleLowerCase()) {
+    throw new HttpError(403, 'The Supabase Auth email does not match this employee profile.');
+  }
+
+  if (profile.authUserId && profile.authUserId !== data.user.id) {
+    throw new HttpError(403, 'Credential mismatch: this Employee ID is bound to a different Supabase Auth user.');
+  }
   await attachAuthUser('tblEmployees', 'lngEmpID', profile, data.user.id);
+
   const position = await one('tblEmpJobPosition', 'lngEmpPositionID', profile.lngEmpPositionID);
   return sendJson(res, 200, {
     token: data.session.access_token,
@@ -791,6 +960,10 @@ const server = http.createServer(async (req, res) => {
       return sendJson(res, 200, { courses });
     }
 
+    if (pathname === '/api/auth/verify-employee' && req.method === 'POST') {
+      return await verifyEmployee(req, res);
+    }
+
     if (pathname === '/api/auth/login' && req.method === 'POST') {
       return await login(req, res);
     }
@@ -942,8 +1115,8 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (pathname === '/api/staff/overview' && req.method === 'GET') {
-      const employee = await requireRole(req, ['ADMIN', 'REGISTRAR', 'FINANCE', 'FACULTY', 'DEAN']);
-      return sendJson(res, 200, overviewForStaffRole(await getStaffOverview(), employee));
+      const employee = await requireRole(req, VALID_STAFF_ROLES);
+      return sendJson(res, 200, overviewForStaffRole(await getStaffOverview(employee), employee));
     }
 
     if (pathname === '/api/registrar/review-document' && req.method === 'POST') {
@@ -993,7 +1166,7 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (pathname === '/api/registrar/dean-approval' && req.method === 'POST') {
-      const employee = await requireRole(req, ['ADMIN', 'REGISTRAR', 'DEAN']);
+      const employee = await requireRole(req, ['ADMIN', 'REGISTRAR']);
       const { studentId, releasePreReg, enrollmentStatus } = await parseBody(req);
       const student = await one('tblStudentInformation', 'lngStudentID', Number(studentId));
       if (!student) throw new HttpError(404, 'Student not found.');
@@ -1003,35 +1176,98 @@ const server = http.createServer(async (req, res) => {
         strEnrollmentStatus: status,
         strApplicationStatus: 'Approved',
         dtmLastChanged: new Date().toISOString(),
-        strUpdatedBy: 'DEAN_REGISTRAR'
+        strUpdatedBy: employee.strAccess
       });
       await addContact(
         student.lngStudentID,
         'Academic Advising & INC Clearance',
-        `Academic Approval & Pre-Registration Form ${releasePreReg ? 'RELEASED' : 'HELD'} by Department Dean / Registrar. Enrollment Status: ${status}.`,
+        `Academic Approval & Pre-Registration Form ${releasePreReg ? 'RELEASED' : 'HELD'} by Office of the Registrar (${employee.strEmpName}). Enrollment Status: ${status}.`,
         employee.lngEmpID
       );
       return sendJson(res, 200, { message: `Updated Pre-Registration release status for ${student.strFirstName} ${student.strLastName}.` });
+    }
+
+    if (pathname === '/api/registrar/student-status' && req.method === 'POST') {
+      const employee = await requireRole(req, ['ADMIN', 'REGISTRAR']);
+      const { studentId, enrollmentStatus, applicationStatus, yearLevel, hasINC, incSubject } = await parseBody(req);
+      const student = await one('tblStudentInformation', 'lngStudentID', Number(studentId));
+      if (!student) throw new HttpError(404, 'Student not found.');
+      const patch = {
+        dtmLastChanged: new Date().toISOString(),
+        strUpdatedBy: `${employee.strAccess}_${employee.strEmpCode || employee.lngEmpID}`
+      };
+      if (enrollmentStatus) patch.strEnrollmentStatus = enrollmentStatus;
+      if (applicationStatus) patch.strApplicationStatus = applicationStatus;
+      if (yearLevel !== undefined && yearLevel !== '') patch.intYearLevel = Number(yearLevel);
+      if (hasINC !== undefined) patch.ysnHasINC = Number(hasINC) ? 1 : 0;
+      if (incSubject !== undefined) patch.strINCSubject = String(incSubject);
+
+      await updateOne('tblStudentInformation', 'lngStudentID', student.lngStudentID, patch);
+      await addContact(
+        student.lngStudentID,
+        'Academic Advising & INC Clearance',
+        `Registrar (${employee.strEmpName}) updated academic/enrollment status to "${patch.strEnrollmentStatus || student.strEnrollmentStatus}".`,
+        employee.lngEmpID
+      );
+      return sendJson(res, 200, { message: `Updated academic status for ${student.strFirstName} ${student.strLastName}.` });
+    }
+
+    if (pathname === '/api/registrar/course' && req.method === 'POST') {
+      await requireRole(req, ['ADMIN', 'REGISTRAR']);
+      const { courseId, courseCode, courseDescription, courseCost, durationYears, notes } = await parseBody(req);
+      if (!courseCode || !courseDescription) {
+        throw new HttpError(400, 'Course code and description are required.');
+      }
+      if (courseId) {
+        const updated = await updateOne('tblCourseList', 'lngCourseID', Number(courseId), {
+          strCourseCode: String(courseCode).trim().toUpperCase(),
+          strCourseDescription: String(courseDescription).trim(),
+          curCourseCost: Number(courseCost || 42500),
+          intCourseDurationYears: Number(durationYears || 4),
+          memNotes: notes || ''
+        });
+        if (!updated) throw new HttpError(404, 'Course not found.');
+        return sendJson(res, 200, { message: `Updated course ${updated.strCourseCode}.` });
+      }
+      const created = await insertOne('tblCourseList', {
+        strCourseCode: String(courseCode).trim().toUpperCase(),
+        strCourseDescription: String(courseDescription).trim(),
+        curCourseCost: Number(courseCost || 42500),
+        intCourseDurationYears: Number(durationYears || 4),
+        memNotes: notes || ''
+      });
+      return sendJson(res, 201, { message: `Created course ${created.strCourseCode} — ${created.strCourseDescription}.` });
     }
 
     if (pathname === '/api/registrar/section' && req.method === 'POST') {
       await requireRole(req, ['ADMIN', 'REGISTRAR']);
       const body = await parseBody(req);
       if (body.sectionId) {
-        const section = await updateOne('tblSubjectSections', 'lngSectionID', Number(body.sectionId), {
-          intMaxCapacity: Number(body.maxCapacity || 35),
-          strSchedule: body.schedule,
-          strRoom: body.room,
-          strPrerequisiteCode: body.prerequisiteCode || 'NONE'
-        });
-        if (!section) throw new HttpError(404, 'Section not found.');
-        return sendJson(res, 200, { message: 'Section capacity and schedule updated.' });
+        const existing = await one('tblSubjectSections', 'lngSectionID', Number(body.sectionId));
+        if (!existing) throw new HttpError(404, 'Section not found.');
+        const patch = {
+          lngCourseID: body.courseId ? Number(body.courseId) : existing.lngCourseID,
+          strSubjectCode: body.subjectCode ? String(body.subjectCode).trim().toUpperCase() : existing.strSubjectCode,
+          strSubjectTitle: body.subjectTitle ? String(body.subjectTitle).trim() : existing.strSubjectTitle,
+          intUnits: body.units ? Number(body.units) : existing.intUnits,
+          strSectionName: body.sectionName ? String(body.sectionName).trim() : existing.strSectionName,
+          strSchedule: body.schedule || existing.strSchedule,
+          strRoom: body.room || existing.strRoom,
+          lngFacultyEmpID: body.facultyEmpId === '' ? null : (body.facultyEmpId !== undefined ? Number(body.facultyEmpId) : existing.lngFacultyEmpID),
+          strPrerequisiteCode: body.prerequisiteCode || 'NONE',
+          intMaxCapacity: Number(body.maxCapacity || existing.intMaxCapacity || 35),
+          curPerUnitFee: body.perUnitFee !== undefined ? Number(body.perUnitFee) : existing.curPerUnitFee,
+          curLabFee: body.labFee !== undefined ? Number(body.labFee) : existing.curLabFee
+        };
+        const section = await updateOne('tblSubjectSections', 'lngSectionID', existing.lngSectionID, patch);
+        return sendJson(res, 200, { message: `Updated section ${section.strSubjectCode} (${section.strSectionName}).` });
       }
       if (!body.subjectCode || !body.subjectTitle) throw new HttpError(400, 'Subject code and title are required.');
+      const config = await getSystemConfig();
       const section = await insertOne('tblSubjectSections', {
         lngCourseID: Number(body.courseId || 1),
-        strSubjectCode: body.subjectCode,
-        strSubjectTitle: body.subjectTitle,
+        strSubjectCode: String(body.subjectCode).trim().toUpperCase(),
+        strSubjectTitle: String(body.subjectTitle).trim(),
         intUnits: Number(body.units || 3),
         strSectionName: body.sectionName || 'BSCOE 3-1',
         strSchedule: body.schedule || 'MWF 02:00 PM - 03:30 PM',
@@ -1040,10 +1276,98 @@ const server = http.createServer(async (req, res) => {
         strPrerequisiteCode: body.prerequisiteCode || 'NONE',
         intMaxCapacity: Number(body.maxCapacity || 35),
         intEnrolledCount: 0,
-        curPerUnitFee: Number(body.perUnitFee || 1850),
+        curPerUnitFee: Number(body.perUnitFee || config.curDefaultPerUnitFee || 1850),
         curLabFee: Number(body.labFee || 0)
       });
       return sendJson(res, 201, { message: `Created new section offering ${section.strSubjectCode} (${section.strSectionName}).` });
+    }
+
+    if (pathname === '/api/registrar/assign-student-section' && req.method === 'POST') {
+      const employee = await requireRole(req, ['ADMIN', 'REGISTRAR']);
+      const { studentId, sectionId } = await parseBody(req);
+      if (!studentId || !sectionId) {
+        throw new HttpError(400, 'Both student and target section/block are required.');
+      }
+      const { error } = await supabase.rpc('joi_enroll_subject', {
+        p_student_id: Number(studentId),
+        p_section_id: Number(sectionId)
+      });
+      if (error) {
+        const status = error.code === 'P0001' ? 409 : 400;
+        throw new HttpError(status, error.message);
+      }
+      const [student, section] = await Promise.all([
+        one('tblStudentInformation', 'lngStudentID', Number(studentId)),
+        one('tblSubjectSections', 'lngSectionID', Number(sectionId))
+      ]);
+      await addContact(
+        Number(studentId),
+        'Academic Advising & INC Clearance',
+        `Registrar (${employee.strEmpName}) placed student into ${section.strSubjectCode} (${section.strSectionName}).`,
+        employee.lngEmpID
+      );
+      return sendJson(res, 200, {
+        message: `Placed ${student.strFirstName} ${student.strLastName} into ${section.strSubjectCode} (${section.strSectionName}).`
+      });
+    }
+
+    if (pathname === '/api/registrar/transfer-student' && req.method === 'POST') {
+      const employee = await requireRole(req, ['ADMIN', 'REGISTRAR']);
+      const { studentId, fromLoadId, toSectionId } = await parseBody(req);
+      if (!studentId || !fromLoadId || !toSectionId) {
+        throw new HttpError(400, 'Student, current load entry, and destination section are required.');
+      }
+      const [student, load, toSection] = await Promise.all([
+        one('tblStudentInformation', 'lngStudentID', Number(studentId)),
+        one('tblStudentSubjectLoad', 'lngLoadID', Number(fromLoadId)),
+        one('tblSubjectSections', 'lngSectionID', Number(toSectionId))
+      ]);
+      if (!student) throw new HttpError(404, 'Student not found.');
+      if (!load || Number(load.lngStudentID) !== Number(studentId)) {
+        throw new HttpError(404, 'Subject load entry not found for this student.');
+      }
+      if (!toSection) throw new HttpError(404, 'Destination section not found.');
+      if (Number(load.lngSectionID) === Number(toSectionId)) {
+        throw new HttpError(400, 'Student is already assigned to that section.');
+      }
+      if (Number(toSection.intEnrolledCount) >= Number(toSection.intMaxCapacity)) {
+        throw new HttpError(409, `Destination section ${toSection.strSectionName} is already at full capacity.`);
+      }
+
+      const fromSection = await one('tblSubjectSections', 'lngSectionID', load.lngSectionID);
+      const existingInTarget = await query(
+        supabase.from('tblStudentSubjectLoad')
+          .select('lngLoadID')
+          .eq('lngStudentID', Number(studentId))
+          .eq('lngSectionID', Number(toSectionId))
+          .eq('strTerm', load.strTerm)
+      );
+      if (existingInTarget.length > 0) {
+        throw new HttpError(409, 'Student is already enrolled in the destination section for this term.');
+      }
+
+      await updateOne('tblStudentSubjectLoad', 'lngLoadID', load.lngLoadID, {
+        lngSectionID: Number(toSectionId),
+        dteEncoded: new Date().toISOString()
+      });
+      if (fromSection) {
+        await updateOne('tblSubjectSections', 'lngSectionID', fromSection.lngSectionID, {
+          intEnrolledCount: Math.max(0, Number(fromSection.intEnrolledCount) - 1)
+        });
+      }
+      await updateOne('tblSubjectSections', 'lngSectionID', toSection.lngSectionID, {
+        intEnrolledCount: Number(toSection.intEnrolledCount) + 1
+      });
+      await recalculateStudentBalance(Number(studentId));
+      await addContact(
+        Number(studentId),
+        'Academic Advising & INC Clearance',
+        `Registrar (${employee.strEmpName}) transferred student from ${fromSection ? `${fromSection.strSubjectCode} (${fromSection.strSectionName})` : 'previous section'} to ${toSection.strSubjectCode} (${toSection.strSectionName}).`,
+        employee.lngEmpID
+      );
+      return sendJson(res, 200, {
+        message: `Transferred ${student.strFirstName} ${student.strLastName} to ${toSection.strSubjectCode} (${toSection.strSectionName}).`
+      });
     }
 
     if (pathname === '/api/finance/verify-payment' && req.method === 'POST') {
@@ -1164,23 +1488,31 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (pathname === '/api/admin/employee' && req.method === 'POST') {
-      const actor = await requireRole(req, ['ADMIN']);
-      const { empId, empCode, empName, email, positionId, accessRole, department } = await parseBody(req);
+      await requireRole(req, ['ADMIN']);
+      const { empId, empCode, empName, email, positionId, accessRole, department, ysnActive } = await parseBody(req);
+      if (accessRole && !VALID_STAFF_ROLES.includes(accessRole)) {
+        throw new HttpError(400, 'Invalid access role. Allowed roles: ADMIN, REGISTRAR, FINANCE, FACULTY.');
+      }
       if (empId) {
-        const employee = await updateOne('tblEmployees', 'lngEmpID', Number(empId), {
-          strEmpName: empName,
-          strEmpEmail: email,
-          lngEmpPositionID: Number(positionId),
-          strAccess: accessRole,
-          strDepartment: department
+        const existing = await one('tblEmployees', 'lngEmpID', Number(empId));
+        if (!existing) throw new HttpError(404, 'Employee not found.');
+        const employee = await updateOne('tblEmployees', 'lngEmpID', existing.lngEmpID, {
+          strEmpCode: empCode ? String(empCode).trim().toUpperCase() : existing.strEmpCode,
+          strEmpName: empName || existing.strEmpName,
+          strEmpEmail: email ? String(email).trim() : existing.strEmpEmail,
+          lngEmpPositionID: positionId ? Number(positionId) : existing.lngEmpPositionID,
+          strAccess: accessRole || existing.strAccess,
+          strDepartment: department !== undefined ? department : existing.strDepartment,
+          ysnActive: ysnActive !== undefined ? (Number(ysnActive) ? 1 : 0) : existing.ysnActive
         });
-        if (!employee) throw new HttpError(404, 'Employee not found.');
-        return sendJson(res, 200, { message: `Updated RBAC permissions for ${empName} (${accessRole}).` });
+        return sendJson(res, 200, { message: `Updated account & RBAC permissions for ${employee.strEmpName} (${employee.strAccess}).` });
       }
       if (!email || !empName || !positionId || !accessRole) {
         throw new HttpError(400, 'Employee name, email, job position, and access role are required.');
       }
-      const code = empCode || `EMP-${accessRole.slice(0, 3)}-${crypto.randomInt(10, 99)}`;
+      const code = empCode
+        ? String(empCode).trim().toUpperCase()
+        : `${empCodePrefix(accessRole)}-${crypto.randomInt(100, 999)}`;
       const { data: invited, error: inviteError } = await supabase.auth.admin.inviteUserByEmail(email, {
         data: { full_name: empName, role: accessRole }
       });
@@ -1195,7 +1527,8 @@ const server = http.createServer(async (req, res) => {
           strEmpEmail: String(email).trim(),
           lngEmpPositionID: Number(positionId),
           strAccess: accessRole,
-          strDepartment: department || 'Academic Affairs'
+          strDepartment: department || 'Academic Affairs',
+          ysnActive: 1
         });
       } catch (error) {
         const { error: cleanupError } = await supabase.auth.admin.deleteUser(invited.user.id);
@@ -1205,6 +1538,90 @@ const server = http.createServer(async (req, res) => {
       return sendJson(res, 201, {
         message: `Created staff profile ${code}. Supabase Auth invitation sent to ${email}.`
       });
+    }
+
+    if (pathname === '/api/admin/system-config' && req.method === 'POST') {
+      const actor = await requireRole(req, ['ADMIN']);
+      const { activeSemester, defaultPerUnitFee, defaultMiscFee, applicationsOpen } = await parseBody(req);
+      if (!activeSemester || !String(activeSemester).trim()) {
+        throw new HttpError(400, 'Active semester label is required.');
+      }
+      const payload = {
+        strActiveSemester: String(activeSemester).trim(),
+        curDefaultPerUnitFee: Number(defaultPerUnitFee || 1850),
+        curDefaultMiscFee: Number(defaultMiscFee || 6850),
+        ysnApplicationsOpen: Number(applicationsOpen) ? 1 : 0,
+        strUpdatedBy: `${actor.strEmpCode || 'ADMIN'} (${actor.strEmpName})`,
+        dtmUpdated: new Date().toISOString()
+      };
+      const { data: existing, error: fetchErr } = await supabase
+        .from('tblSystemConfig')
+        .select('lngConfigID')
+        .eq('lngConfigID', 1)
+        .maybeSingle();
+      if (fetchErr) {
+        throw new HttpError(500, 'tblSystemConfig table is not initialized yet. Run the SQL migration in supabase_schema.sql.');
+      }
+      if (existing) {
+        await updateOne('tblSystemConfig', 'lngConfigID', 1, payload);
+      } else {
+        await insertOne('tblSystemConfig', { lngConfigID: 1, ...payload });
+      }
+      return sendJson(res, 200, { message: 'System configuration updated successfully.' });
+    }
+
+    if (pathname === '/api/admin/manage-account' && req.method === 'POST') {
+      await requireRole(req, ['ADMIN']);
+      const { accountType, accountId, action, newPassword, empCode, accessRole, ysnActive, enrollmentStatus } = await parseBody(req);
+      if (!accountType || !accountId || !action) {
+        throw new HttpError(400, 'Account type, account ID, and action are required.');
+      }
+      if (accountType === 'staff') {
+        const employee = await one('tblEmployees', 'lngEmpID', Number(accountId));
+        if (!employee) throw new HttpError(404, 'Employee account not found.');
+        if (action === 'reset-password') {
+          if (!employee.authUserId) throw new HttpError(409, 'Employee is not yet linked to Supabase Auth.');
+          if (!newPassword || String(newPassword).length < 8) {
+            throw new HttpError(400, 'New password must be at least 8 characters long.');
+          }
+          const { error } = await supabase.auth.admin.updateUserById(employee.authUserId, { password: String(newPassword) });
+          if (error) throw new HttpError(400, error.message);
+          return sendJson(res, 200, { message: `Password reset for ${employee.strEmpName} (${employee.strEmpCode}).` });
+        }
+        if (action === 'update') {
+          if (accessRole && !VALID_STAFF_ROLES.includes(accessRole)) {
+            throw new HttpError(400, 'Invalid access role.');
+          }
+          await updateOne('tblEmployees', 'lngEmpID', employee.lngEmpID, {
+            strEmpCode: empCode ? String(empCode).trim().toUpperCase() : employee.strEmpCode,
+            strAccess: accessRole || employee.strAccess,
+            ysnActive: ysnActive !== undefined ? (Number(ysnActive) ? 1 : 0) : employee.ysnActive
+          });
+          return sendJson(res, 200, { message: `Updated staff account ${employee.strEmpName}.` });
+        }
+      }
+      if (accountType === 'student') {
+        const student = await one('tblStudentInformation', 'lngStudentID', Number(accountId));
+        if (!student) throw new HttpError(404, 'Student account not found.');
+        if (action === 'reset-password') {
+          if (!student.authUserId) throw new HttpError(409, 'Student is not yet linked to Supabase Auth.');
+          if (!newPassword || String(newPassword).length < 8) {
+            throw new HttpError(400, 'New password must be at least 8 characters long.');
+          }
+          const { error } = await supabase.auth.admin.updateUserById(student.authUserId, { password: String(newPassword) });
+          if (error) throw new HttpError(400, error.message);
+          return sendJson(res, 200, { message: `Password reset for student ${student.strFirstName} ${student.strLastName} (${student.strStudentNo}).` });
+        }
+        if (action === 'update') {
+          await updateOne('tblStudentInformation', 'lngStudentID', student.lngStudentID, {
+            strEnrollmentStatus: enrollmentStatus || student.strEnrollmentStatus,
+            dtmLastChanged: new Date().toISOString(),
+            strUpdatedBy: 'ADMIN'
+          });
+          return sendJson(res, 200, { message: `Updated student account ${student.strStudentNo}.` });
+        }
+      }
+      throw new HttpError(400, 'Unsupported account management action.');
     }
 
     if (pathname === '/api/admin/backup' && req.method === 'POST') {

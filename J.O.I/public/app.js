@@ -58,21 +58,49 @@
     ]
   };
 
+  const ROLE_TABS = {
+    ADMIN: [
+      { id: 'admin-dashboard', label: 'System Config & Accounts' },
+      { id: 'admin-database', label: 'Database Management' },
+      { id: 'registrar-documents', label: 'Registrar: Docs & Clearance' },
+      { id: 'registrar-sections', label: 'Registrar: Courses & Sections' },
+      { id: 'registrar-placement', label: 'Registrar: Placement & Master Lists' },
+      { id: 'finance-payments', label: 'Finance: Payments & Promissory' },
+      { id: 'faculty-grades', label: 'Faculty: Classes & Grades' }
+    ],
+    REGISTRAR: [
+      { id: 'registrar-documents', label: 'Admissions & Document Review' },
+      { id: 'registrar-sections', label: 'Courses, Blocks & Sections' },
+      { id: 'registrar-placement', label: 'Student Placement & Master Lists' }
+    ],
+    FINANCE: [
+      { id: 'finance-payments', label: 'Balances, Payments & Promissory Notes' }
+    ],
+    FACULTY: [
+      { id: 'faculty-grades', label: 'My Assigned Sections & Grades' }
+    ]
+  };
+
   const state = {
     view: 'landing', // 'landing' | 'applicants-auth' | 'students-auth' | 'faculty-auth' | 'applicant-intake' | 'student-portal' | 'staff-portal'
     authInput: {
       identifier: '',
       password: '',
-      showPassword: false
+      showPassword: false,
+      staffEmpCode: '',
+      staffEmail: '',
+      staffVerified: null
     },
     currentUser: null,
     studentBundle: null,
     staffOverview: null,
     publicCourses: [],
     studentTab: 'overview', // 'overview' | 'courses' | 'payments' | 'documents' | 'profile' | 'contacts'
-    staffTab: 'registrar', // 'registrar' | 'finance' | 'faculty' | 'admin' | 'database'
+    staffTab: 'registrar-documents',
     masterListSectionFilter: 'ALL',
-    erSelectedTable: 'tblStudentInformation',
+    adminSelectedTable: 'tblEmployees',
+    registrarEditSection: null,
+    registrarTransferLoad: null,
     intakeDraft: loadDraft()
   };
 
@@ -236,20 +264,57 @@
       state.authInput.identifier = presetAuth.identifier || '';
       state.authInput.password = presetAuth.password || '';
       state.authInput.showPassword = false;
+      state.authInput.staffEmpCode = presetAuth.staffEmpCode || '';
+      state.authInput.staffEmail = presetAuth.staffEmail || '';
+      state.authInput.staffVerified = null;
     } else if (viewName.endsWith('-auth')) {
       state.authInput.identifier = '';
       state.authInput.password = '';
       state.authInput.showPassword = false;
+      state.authInput.staffEmpCode = '';
+      state.authInput.staffEmail = '';
+      state.authInput.staffVerified = null;
     }
     render();
     window.scrollTo({ top: 0, behavior: 'smooth' });
   }
 
+  async function verifyStaffEmployeeId() {
+    try {
+      const empCode = String(state.authInput.staffEmpCode || '').trim();
+      if (!empCode) {
+        showToast('Please enter your Employee ID / Code first.', 'error');
+        return;
+      }
+      const res = await apiFetch('/api/auth/verify-employee', {
+        method: 'POST',
+        body: JSON.stringify({ empCode })
+      });
+      state.authInput.staffVerified = res;
+      state.authInput.staffEmpCode = res.empCode;
+      render();
+      showToast(`Employee ID verified — Role Detected: ${res.role}`, 'success');
+    } catch (err) {
+      state.authInput.staffVerified = null;
+      render();
+      showToast(err.message, 'error');
+    }
+  }
+
   async function loginWithCredentials(mode, identifier, password) {
     try {
+      const payload = mode === 'staff'
+        ? {
+            mode: 'staff',
+            empCode: state.authInput.staffEmpCode,
+            email: state.authInput.staffEmail,
+            password
+          }
+        : { mode, identifier, password };
+
       const res = await apiFetch('/api/auth/login', {
         method: 'POST',
-        body: JSON.stringify({ mode, identifier, password })
+        body: JSON.stringify(payload)
       });
       state.currentUser = res;
 
@@ -262,14 +327,8 @@
       } else {
         const overview = await apiFetch('/api/staff/overview');
         state.staffOverview = overview;
-        const roleToTab = {
-          REGISTRAR: 'registrar',
-          DEAN: 'registrar',
-          FINANCE: 'finance',
-          FACULTY: 'faculty',
-          ADMIN: 'admin'
-        };
-        state.staffTab = roleToTab[res.role] || 'registrar';
+        const allowedTabs = ROLE_TABS[res.role] || [];
+        state.staffTab = allowedTabs[0]?.id || 'registrar-documents';
         state.view = 'staff-portal';
         showToast(`Authenticated as ${res.name} — ${res.position} (${res.role})`, 'success');
       }
@@ -291,7 +350,7 @@
   }
 
   // =========================================================================
-  // VIEW 1: LANDING GATEWAY (Matches Image 1: Crest + Faculty & Student Pills)
+  // VIEW 1: LANDING GATEWAY (Two-Module Separation: School Access vs Student Access)
   // =========================================================================
   function renderLandingView() {
     return `
@@ -303,16 +362,16 @@
 
           <div class="landing-actions-row">
             <button class="landing-pill-btn" onclick="window.JOIApp.navigate('faculty-auth')">
-              Faculty
+              Faculty / School Access
             </button>
             <button class="landing-pill-btn" onclick="window.JOIApp.navigate('students-auth')">
-              Student
+              Student Access
             </button>
           </div>
 
           <div class="landing-applicant-sub">
             <button class="landing-applicant-btn" onclick="window.JOIApp.navigate('applicants-auth')">
-              Applicants Access Module &bull; New &amp; Transferee Intake
+              Student Access &bull; Applicant Intake &amp; New Admissions
             </button>
           </div>
         </div>
@@ -449,55 +508,93 @@
   }
 
   // =========================================================================
-  // VIEW 4: FACULTY & STAFF ACCESS MODULE (RBAC for Faculty, Registrar, Finance, Admin)
+  // VIEW 4: SCHOOL ACCESS MODULE (Two-Step: Employee ID Gate + Email/Password)
   // =========================================================================
   function renderFacultyAuthView() {
     const pwType = state.authInput.showPassword ? 'text' : 'password';
+    const verified = state.authInput.staffVerified;
     return `
       <section class="campus-stage auth-tint">
         <div class="stage-content">
-          <h1 class="auth-module-heading">Faculty &amp; Staff Access Module</h1>
+          <h1 class="auth-module-heading">School Access Module</h1>
 
           <div class="auth-card">
-            <div class="auth-card-title">User Authentication</div>
+            <div class="auth-card-title">Two-Step Verified Staff Authentication</div>
 
             <div class="auth-field-group">
-              <label class="auth-field-label" for="staff-id-input">Employee ID / Code or Email:</label>
-              <div class="auth-input-wrap">
+              <label class="auth-field-label" for="staff-empcode-input">Step 1 &mdash; Employee ID / Code (e.g., ADM-001, REG-001, FIN-001, FAC-001):</label>
+              <div style="display:flex;gap:8px;align-items:center;">
                 <input
-                  id="staff-id-input"
+                  id="staff-empcode-input"
                   type="text"
                   class="auth-input"
-                  value="${escapeHtml(state.authInput.identifier)}"
-                  oninput="window.JOIApp.setAuthField('identifier', this.value)"
-                  autocomplete="username"
-                  autofocus
+                  value="${escapeHtml(state.authInput.staffEmpCode)}"
+                  placeholder="Enter Employee ID (e.g. REG-001)"
+                  oninput="window.JOIApp.setAuthField('staffEmpCode', this.value)"
+                  onkeydown="if(event.key==='Enter') window.JOIApp.verifyStaffEmployeeId()"
+                  ${verified ? 'readonly' : 'autofocus'}
                 />
+                ${verified
+                  ? `<button type="button" class="auth-action-btn" onclick="window.JOIApp.resetStaffVerification()" style="white-space:nowrap;">Change</button>`
+                  : `<button type="button" class="auth-action-btn" onclick="window.JOIApp.verifyStaffEmployeeId()" style="white-space:nowrap;">Verify ID</button>`
+                }
               </div>
             </div>
 
-            <div class="auth-field-group">
-              <label class="auth-field-label" for="staff-password-input">Password:</label>
-              <div class="auth-input-wrap">
-                <input
-                  id="staff-password-input"
-                  type="${pwType}"
-                  class="auth-input"
-                  value="${escapeHtml(state.authInput.password)}"
-                  oninput="window.JOIApp.setAuthField('password', this.value)"
-                  onkeydown="if(event.key==='Enter') window.JOIApp.submitAuth('staff')"
-                  autocomplete="current-password"
-                />
-                <button type="button" class="eye-toggle-btn" onclick="window.JOIApp.togglePassword()" title="Toggle Password Visibility">
-                  ${renderEyeSvg(state.authInput.showPassword)}
-                </button>
+            ${verified ? `
+              <div class="staff-verified-badge">
+                <div>
+                  <strong>Employee Verified:</strong> ${escapeHtml(verified.maskedName)}
+                  <span class="role-pill">Role Detected: ${escapeHtml(verified.role)}</span>
+                </div>
+                <div style="margin-top:4px;color:#475569;font-size:11.5px;">
+                  ${escapeHtml(verified.position || verified.role)} &bull; ${escapeHtml(verified.department || 'J.O.I Academy')}
+                </div>
               </div>
-            </div>
 
-            <div class="auth-btn-row">
-              <button type="button" class="auth-action-btn" onclick="window.JOIApp.clearAuth()">Clear</button>
-              <button type="button" class="auth-action-btn" onclick="window.JOIApp.submitAuth('staff')">Enter</button>
-            </div>
+              <div class="auth-field-group">
+                <label class="auth-field-label" for="staff-email-input">Step 2 &mdash; Institutional Email:</label>
+                <div class="auth-input-wrap">
+                  <input
+                    id="staff-email-input"
+                    type="email"
+                    class="auth-input"
+                    value="${escapeHtml(state.authInput.staffEmail)}"
+                    placeholder="staff@joi.edu.ph"
+                    oninput="window.JOIApp.setAuthField('staffEmail', this.value)"
+                    autocomplete="email"
+                    autofocus
+                  />
+                </div>
+              </div>
+
+              <div class="auth-field-group">
+                <label class="auth-field-label" for="staff-password-input">Password:</label>
+                <div class="auth-input-wrap">
+                  <input
+                    id="staff-password-input"
+                    type="${pwType}"
+                    class="auth-input"
+                    value="${escapeHtml(state.authInput.password)}"
+                    oninput="window.JOIApp.setAuthField('password', this.value)"
+                    onkeydown="if(event.key==='Enter') window.JOIApp.submitAuth('staff')"
+                    autocomplete="current-password"
+                  />
+                  <button type="button" class="eye-toggle-btn" onclick="window.JOIApp.togglePassword()" title="Toggle Password Visibility">
+                    ${renderEyeSvg(state.authInput.showPassword)}
+                  </button>
+                </div>
+              </div>
+
+              <div class="auth-btn-row">
+                <button type="button" class="auth-action-btn" onclick="window.JOIApp.clearAuth()">Clear</button>
+                <button type="button" class="auth-action-btn" onclick="window.JOIApp.submitAuth('staff')">Sign In</button>
+              </div>
+            ` : `
+              <p class="auth-applicant-notice" style="margin-top:10px;margin-bottom:4px;">
+                Enter your assigned Employee ID first. Your department and role (<strong>ADMIN</strong>, <strong>REGISTRAR</strong>, <strong>FINANCE</strong>, or <strong>FACULTY</strong>) will be auto-detected before credential entry.
+              </p>
+            `}
 
             <button type="button" class="auth-nav-link" onclick="window.JOIApp.navigate('landing')">
               &larr; Return to Academy Portal Gateway
@@ -1407,39 +1504,34 @@
   }
 
   // =========================================================================
-  // VIEW 7: STAFF / REGISTRAR / FINANCE / FACULTY / ADMIN & ER DATABASE PORTAL
+  // VIEW 7: SCHOOL ACCESS PORTAL (Strict RBAC & Tab Isolation)
   // =========================================================================
   function renderStaffPortal() {
     const ov = state.staffOverview;
     if (!ov) return `<div style="padding:40px;color:#fff;text-align:center;">Loading Staff Management Console...</div>`;
     const u = state.currentUser;
-
-    const tabs = [
-      { id: 'registrar', label: 'Registrar & Admissions' },
-      { id: 'finance', label: 'Finance & QR / Promissory' },
-      { id: 'faculty', label: 'Faculty Dashboard & Grades' },
-      { id: 'admin', label: 'System Admin & Backups' },
-      { id: 'database', label: 'ER Diagram & Supabase Tables' }
-    ];
+    const tabs = ROLE_TABS[u.role] || [];
+    if (tabs.length === 0) {
+      return `<div style="padding:40px;color:#fff;text-align:center;">Unauthorized role: ${escapeHtml(u.role)}</div>`;
+    }
+    if (!tabs.some((t) => t.id === state.staffTab)) {
+      state.staffTab = tabs[0].id;
+    }
 
     let content = '';
 
-    if (state.staffTab === 'registrar') {
-      const filteredLoads = state.masterListSectionFilter === 'ALL'
-        ? ov.subjectLoads
-        : ov.subjectLoads.filter((l) => l.strSectionName === state.masterListSectionFilter);
-
+    if (state.staffTab === 'registrar-documents') {
       content = `
         <div class="kpi-grid">
           <div class="kpi-card">
             <div class="kpi-label">Total Student Records</div>
             <div class="kpi-value">${ov.students.length}</div>
-            <div class="kpi-sub">In</div>
+            <div class="kpi-sub">Master Directory</div>
           </div>
           <div class="kpi-card">
             <div class="kpi-label">Pending Document Reviews</div>
             <div class="kpi-value" style="color:#b45309;">${ov.documents.filter((d) => d.strStatus === 'Pending Review').length}</div>
-            <div class="kpi-sub">Queue with Auto-Email</div>
+            <div class="kpi-sub">Admission Queue</div>
           </div>
           <div class="kpi-card">
             <div class="kpi-label">Conditional INC Students</div>
@@ -1453,11 +1545,10 @@
           </div>
         </div>
 
-        <!-- FR-003: Admission Document Verification with Automated Email Notification -->
         <div class="panel-card">
           <div class="panel-header">
             <h3>Applicant &amp; Transferee Admission Document Verification Queue</h3>
-            <span class="badge badge-info">Auto-Dispatches Email Notification on Review</span>
+            <span class="badge badge-info">Auto-Dispatches Notification on Review</span>
           </div>
           <div class="panel-body">
             <div class="data-table-wrap">
@@ -1469,7 +1560,7 @@
                     <th>Digital File</th>
                     <th>Status</th>
                     <th>Remarks</th>
-                    <th>Registrar Action </th>
+                    <th>Registrar Action</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -1488,9 +1579,9 @@
                       </td>
                       <td>${escapeHtml(d.strRemarks)}</td>
                       <td>
-                        <div style="display:flex;gap:6px;">
-                          <button class="btn btn-success btn-sm" onclick="window.JOIApp.registrarReviewDoc(${d.lngDocID}, 'Approved')">Approve &amp; Email</button>
-                          <button class="btn btn-danger btn-sm" onclick="window.JOIApp.registrarReviewDoc(${d.lngDocID}, 'Rejected')">Reject &amp; Email</button>
+                        <div style="display:flex;gap:6px;flex-wrap:wrap;">
+                          <button class="btn btn-success btn-sm" onclick="window.JOIApp.registrarReviewDoc(${d.lngDocID}, 'Approved')">Approve</button>
+                          <button class="btn btn-danger btn-sm" onclick="window.JOIApp.registrarReviewDoc(${d.lngDocID}, 'Rejected')">Reject</button>
                         </div>
                       </td>
                     </tr>
@@ -1501,10 +1592,9 @@
           </div>
         </div>
 
-        <!-- FR-004: Academic & Department Dean Pre-Registration Release / INC Grace Period -->
         <div class="panel-card">
           <div class="panel-header">
-            <h3>Student Academic Clearance, INC Grace Period &amp; Dean Pre-Registration Release</h3>
+            <h3>Student Academic Clearance, INC Grace Period &amp; Pre-Registration Release</h3>
           </div>
           <div class="panel-body">
             <div class="data-table-wrap">
@@ -1514,10 +1604,10 @@
                     <th>Student No.</th>
                     <th>Student Name</th>
                     <th>Type &amp; Program</th>
-                    <th>INC Grade Status </th>
-                    <th>Pre-Reg Form Released</th>
+                    <th>INC Grade Status</th>
+                    <th>Pre-Reg Form</th>
                     <th>Enrollment Status</th>
-                    <th>Dean / Registrar Action</th>
+                    <th>Registrar Actions</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -1525,22 +1615,153 @@
                     <tr>
                       <td><code>${escapeHtml(s.strStudentNo)}</code></td>
                       <td><strong>${escapeHtml(s.strFirstName)} ${escapeHtml(s.strLastName)}</strong></td>
-                      <td>${escapeHtml(s.strStudentType)} &bull; ${escapeHtml(s.strCourseCode || 'BSCOE')}</td>
+                      <td>${escapeHtml(s.strStudentType)} &bull; ${escapeHtml(s.strCourseCode || 'BSCOE')} (Yr ${s.intYearLevel || 1})</td>
                       <td>
                         ${s.ysnHasINC
-                          ? `<span class="badge badge-warning">INC: ${escapeHtml(s.strINCSubject)} — Incurred ${escapeHtml(s.dteINCIncurred)}</span>`
-                          : `<span class="badge badge-success">No INC — Cleared</span>`}
+                          ? `<span class="badge badge-warning">INC: ${escapeHtml(s.strINCSubject)}</span>`
+                          : `<span class="badge badge-success">Cleared</span>`}
                       </td>
                       <td>
                         <span class="badge ${s.ysnDeanPreRegReleased ? 'badge-success' : 'badge-warning'}">
-                          ${s.ysnDeanPreRegReleased ? 'Released' : 'Held / Pending'}
+                          ${s.ysnDeanPreRegReleased ? 'Released' : 'Held'}
                         </span>
                       </td>
-                      <td><span class="badge badge-navy">${escapeHtml(s.strEnrollmentStatus)}</span></td>
                       <td>
-                        <button class="btn btn-primary btn-sm" onclick="window.JOIApp.toggleDeanRelease(${s.lngStudentID}, ${s.ysnDeanPreRegReleased ? 0 : 1})">
-                          ${s.ysnDeanPreRegReleased ? 'Hold Pre-Reg' : 'Release Pre-Reg Form'}
-                        </button>
+                        <select id="reg-stu-status-${s.lngStudentID}" style="padding:4px 6px;border-radius:4px;border:1px solid #cbd5e1;font-size:12px;">
+                          ${['Applicant', 'Pre-Registered', 'Conditionally Enrolled (INC)', 'Awaiting Payment Verification', 'Officially Enrolled', 'Dropped / Inactive'].map((st) => `
+                            <option value="${st}" ${s.strEnrollmentStatus === st ? 'selected' : ''}>${st}</option>
+                          `).join('')}
+                        </select>
+                      </td>
+                      <td>
+                        <div style="display:flex;gap:6px;flex-wrap:wrap;">
+                          <button class="btn btn-outline btn-sm" onclick="window.JOIApp.registrarUpdateStudentStatus(${s.lngStudentID})">Save Status</button>
+                          <button class="btn btn-primary btn-sm" onclick="window.JOIApp.toggleDeanRelease(${s.lngStudentID}, ${s.ysnDeanPreRegReleased ? 0 : 1})">
+                            ${s.ysnDeanPreRegReleased ? 'Hold Pre-Reg' : 'Release Pre-Reg'}
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  `).join('')}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      `;
+    } else if (state.staffTab === 'registrar-sections') {
+      const editSec = state.registrarEditSection;
+      content = `
+        <div class="panel-card">
+          <div class="panel-header">
+            <h3>${editSec ? `Edit Section / Block #${editSec.lngSectionID}` : 'Create New Subject Section / Block'}</h3>
+            ${editSec ? `<button class="btn btn-outline btn-sm" onclick="window.JOIApp.registrarClearSectionForm()">Cancel Edit</button>` : ''}
+          </div>
+          <div class="panel-body">
+            <div class="form-grid">
+              <div class="form-field">
+                <label>Degree Program</label>
+                <select id="sec-course-id">
+                  ${ov.courses.map((c) => `
+                    <option value="${c.lngCourseID}" ${editSec && Number(editSec.lngCourseID) === Number(c.lngCourseID) ? 'selected' : ''}>
+                      ${escapeHtml(c.strCourseCode)} &mdash; ${escapeHtml(c.strCourseDescription)}
+                    </option>
+                  `).join('')}
+                </select>
+              </div>
+              <div class="form-field">
+                <label>Subject Code</label>
+                <input id="sec-subj-code" type="text" value="${escapeHtml(editSec ? editSec.strSubjectCode : '')}" placeholder="e.g. CPE 301" />
+              </div>
+              <div class="form-field">
+                <label>Subject Title</label>
+                <input id="sec-subj-title" type="text" value="${escapeHtml(editSec ? editSec.strSubjectTitle : '')}" placeholder="e.g. Microprocessor Systems" />
+              </div>
+              <div class="form-field">
+                <label>Block / Section Name</label>
+                <input id="sec-name" type="text" value="${escapeHtml(editSec ? editSec.strSectionName : '')}" placeholder="e.g. BSCOE 3-1" />
+              </div>
+              <div class="form-field">
+                <label>Units</label>
+                <input id="sec-units" type="number" min="1" max="6" value="${editSec ? editSec.intUnits : 3}" />
+              </div>
+              <div class="form-field">
+                <label>Schedule</label>
+                <input id="sec-schedule" type="text" value="${escapeHtml(editSec ? editSec.strSchedule : 'MWF 09:00 AM - 10:30 AM')}" />
+              </div>
+              <div class="form-field">
+                <label>Assigned Room</label>
+                <input id="sec-room" type="text" value="${escapeHtml(editSec ? editSec.strRoom : 'Salcedo Hall 301')}" />
+              </div>
+              <div class="form-field">
+                <label>Assigned Faculty</label>
+                <select id="sec-faculty-id">
+                  <option value="">-- TBA / Unassigned --</option>
+                  ${(ov.facultyList || []).map((f) => `
+                    <option value="${f.lngEmpID}" ${editSec && Number(editSec.lngFacultyEmpID) === Number(f.lngEmpID) ? 'selected' : ''}>
+                      ${escapeHtml(f.strEmpName)}
+                    </option>
+                  `).join('')}
+                </select>
+              </div>
+              <div class="form-field">
+                <label>Prerequisite Code</label>
+                <input id="sec-prereq" type="text" value="${escapeHtml(editSec ? editSec.strPrerequisiteCode : 'NONE')}" />
+              </div>
+              <div class="form-field">
+                <label>Max Capacity</label>
+                <input id="sec-capacity" type="number" min="1" value="${editSec ? editSec.intMaxCapacity : 35}" />
+              </div>
+              <div class="form-field">
+                <label>Per-Unit Fee (PHP)</label>
+                <input id="sec-unit-fee" type="number" step="0.01" value="${editSec ? editSec.curPerUnitFee : 1850}" />
+              </div>
+              <div class="form-field">
+                <label>Lab Fee (PHP)</label>
+                <input id="sec-lab-fee" type="number" step="0.01" value="${editSec ? editSec.curLabFee : 0}" />
+              </div>
+            </div>
+            <button class="btn btn-primary" onclick="window.JOIApp.registrarSaveSection()">
+              ${editSec ? 'Save Section Changes' : '+ Create Section / Block'}
+            </button>
+          </div>
+        </div>
+
+        <div class="panel-card">
+          <div class="panel-header">
+            <h3>Active Subject Sections &amp; Blocks (${ov.sections.length})</h3>
+          </div>
+          <div class="panel-body">
+            <div class="data-table-wrap">
+              <table class="data-table">
+                <thead>
+                  <tr>
+                    <th>Block / Section</th>
+                    <th>Subject</th>
+                    <th>Units</th>
+                    <th>Schedule &amp; Room</th>
+                    <th>Faculty</th>
+                    <th>Prerequisite</th>
+                    <th>Capacity</th>
+                    <th>Action</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  ${ov.sections.map((s) => `
+                    <tr>
+                      <td><span class="badge badge-navy">${escapeHtml(s.strSectionName)}</span></td>
+                      <td><strong>${escapeHtml(s.strSubjectCode)}</strong> &mdash; ${escapeHtml(s.strSubjectTitle)}</td>
+                      <td>${s.intUnits}</td>
+                      <td>${escapeHtml(s.strSchedule)}<br/><small style="color:#64748b;">${escapeHtml(s.strRoom)}</small></td>
+                      <td>${escapeHtml(s.strProfessorName || 'TBA')}</td>
+                      <td><code>${escapeHtml(s.strPrerequisiteCode)}</code></td>
+                      <td>
+                        <span class="badge ${s.intEnrolledCount >= s.intMaxCapacity ? 'badge-danger' : 'badge-success'}">
+                          ${s.intEnrolledCount} / ${s.intMaxCapacity}
+                        </span>
+                      </td>
+                      <td>
+                        <button class="btn btn-outline btn-sm" onclick="window.JOIApp.registrarEditSection(${s.lngSectionID})">Edit</button>
                       </td>
                     </tr>
                   `).join('')}
@@ -1550,17 +1771,135 @@
           </div>
         </div>
 
-        <!-- Official Master Lists Generator -->
         <div class="panel-card">
           <div class="panel-header">
-            <h3>Automated Official Class Master Lists (Context Diagram Flow 4)</h3>
+            <h3>Degree Programs / Course Catalog (${ov.courses.length})</h3>
+          </div>
+          <div class="panel-body">
+            <div style="background:#f8fafc;padding:14px;border-radius:10px;border:1px solid #cbd5e1;margin-bottom:16px;">
+              <h4 style="font-size:13.5px;margin-bottom:10px;color:var(--joi-navy-dark);">Add New Degree Program / Course</h4>
+              <div class="form-grid">
+                <div class="form-field">
+                  <label>Course Code</label>
+                  <input id="reg-course-code" type="text" placeholder="e.g. BSDS" />
+                </div>
+                <div class="form-field">
+                  <label>Course Description</label>
+                  <input id="reg-course-desc" type="text" placeholder="e.g. BS in Data Science" />
+                </div>
+                <div class="form-field">
+                  <label>Base Cost (PHP)</label>
+                  <input id="reg-course-cost" type="number" step="0.01" value="42500" />
+                </div>
+                <div class="form-field">
+                  <label>Duration (Years)</label>
+                  <input id="reg-course-years" type="number" min="1" max="6" value="4" />
+                </div>
+              </div>
+              <button class="btn btn-primary btn-sm" onclick="window.JOIApp.registrarSaveCourse()">+ Add Course</button>
+            </div>
+            <div class="data-table-wrap">
+              <table class="data-table">
+                <thead>
+                  <tr>
+                    <th>Code</th>
+                    <th>Description</th>
+                    <th>Duration</th>
+                    <th>Base Cost</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  ${ov.courses.map((c) => `
+                    <tr>
+                      <td><strong>${escapeHtml(c.strCourseCode)}</strong></td>
+                      <td>${escapeHtml(c.strCourseDescription)}</td>
+                      <td>${c.intCourseDurationYears} yrs</td>
+                      <td>${formatPHP(c.curCourseCost)}</td>
+                    </tr>
+                  `).join('')}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      `;
+    } else if (state.staffTab === 'registrar-placement') {
+      const sectionNames = [...new Set(ov.sections.map((s) => s.strSectionName).filter(Boolean))];
+      const filteredLoads = state.masterListSectionFilter === 'ALL'
+        ? ov.subjectLoads
+        : ov.subjectLoads.filter((l) => l.strSectionName === state.masterListSectionFilter);
+      const transferLoad = state.registrarTransferLoad;
+
+      content = `
+        <div class="panel-card">
+          <div class="panel-header">
+            <h3>Place Student into Subject / Block</h3>
+          </div>
+          <div class="panel-body">
+            <div class="form-grid">
+              <div class="form-field">
+                <label>Select Student</label>
+                <select id="assign-student-id">
+                  ${ov.students.map((s) => `
+                    <option value="${s.lngStudentID}">${escapeHtml(s.strStudentNo)} &mdash; ${escapeHtml(s.strLastName)}, ${escapeHtml(s.strFirstName)} (${escapeHtml(s.strCourseCode || 'N/A')})</option>
+                  `).join('')}
+                </select>
+              </div>
+              <div class="form-field">
+                <label>Target Section / Block</label>
+                <select id="assign-section-id">
+                  ${ov.sections.map((sec) => `
+                    <option value="${sec.lngSectionID}">${escapeHtml(sec.strSectionName)} &bull; ${escapeHtml(sec.strSubjectCode)} (${sec.intEnrolledCount}/${sec.intMaxCapacity})</option>
+                  `).join('')}
+                </select>
+              </div>
+            </div>
+            <button class="btn btn-primary" onclick="window.JOIApp.registrarAssignStudentSection()">Assign Student to Section</button>
+          </div>
+        </div>
+
+        ${transferLoad ? `
+          <div class="panel-card" style="border:2px solid var(--joi-gold);">
+            <div class="panel-header">
+              <h3>Transfer Student Between Sections</h3>
+              <button class="btn btn-outline btn-sm" onclick="window.JOIApp.registrarCancelTransfer()">Cancel Transfer</button>
+            </div>
+            <div class="panel-body">
+              <p style="font-size:13px;margin-bottom:12px;">
+                Transferring <strong>${escapeHtml(transferLoad.strFirstName)} ${escapeHtml(transferLoad.strLastName)}</strong>
+                (<code>${escapeHtml(transferLoad.strStudentNo)}</code>) from
+                <span class="badge badge-navy">${escapeHtml(transferLoad.strSubjectCode)} (${escapeHtml(transferLoad.strSectionName)})</span>
+              </p>
+              <div class="form-grid">
+                <div class="form-field">
+                  <label>Destination Section / Block</label>
+                  <select id="transfer-to-section-id">
+                    ${ov.sections
+                      .filter((sec) => Number(sec.lngSectionID) !== Number(transferLoad.lngSectionID))
+                      .map((sec) => `
+                        <option value="${sec.lngSectionID}">
+                          ${escapeHtml(sec.strSectionName)} &bull; ${escapeHtml(sec.strSubjectCode)} (${sec.intEnrolledCount}/${sec.intMaxCapacity}) &mdash; ${escapeHtml(sec.strSchedule)}
+                        </option>
+                      `).join('')}
+                  </select>
+                </div>
+              </div>
+              <button class="btn btn-gold" onclick="window.JOIApp.registrarTransferStudent()">Confirm Section Transfer</button>
+            </div>
+          </div>
+        ` : ''}
+
+        <div class="panel-card">
+          <div class="panel-header">
+            <h3>Official Class Master Lists &amp; Section Transfers</h3>
             <div style="display:flex;gap:8px;align-items:center;">
               <select onchange="window.JOIApp.setMasterListFilter(this.value)" style="padding:5px 10px;border-radius:6px;border:1px solid #cbd5e1;">
-                <option value="ALL" ${state.masterListSectionFilter === 'ALL' ? 'selected' : ''}>All Sections — ${ov.subjectLoads.length} enrollments</option>
-                <option value="BSCOE 3-1" ${state.masterListSectionFilter === 'BSCOE 3-1' ? 'selected' : ''}>BSCOE 3-1</option>
-                <option value="BSCOE 3-2" ${state.masterListSectionFilter === 'BSCOE 3-2' ? 'selected' : ''}>BSCOE 3-2</option>
+                <option value="ALL" ${state.masterListSectionFilter === 'ALL' ? 'selected' : ''}>All Sections (${ov.subjectLoads.length})</option>
+                ${sectionNames.map((name) => `
+                  <option value="${escapeHtml(name)}" ${state.masterListSectionFilter === name ? 'selected' : ''}>${escapeHtml(name)}</option>
+                `).join('')}
               </select>
-              <button class="btn btn-outline btn-sm" onclick="window.print()">Export / Print Official Master List</button>
+              <button class="btn btn-outline btn-sm" onclick="window.print()">Export / Print Master List</button>
             </div>
           </div>
           <div class="panel-body">
@@ -1569,12 +1908,13 @@
                 <thead>
                   <tr>
                     <th>Section</th>
-                    <th>Subject Code &amp; Title</th>
+                    <th>Subject</th>
                     <th>Student ID No.</th>
                     <th>Student Name</th>
                     <th>Official Status</th>
                     <th>Schedule &amp; Room</th>
                     <th>Professor</th>
+                    <th>Transfer</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -1591,6 +1931,9 @@
                       </td>
                       <td>${escapeHtml(l.strSchedule)} &bull; ${escapeHtml(l.strRoom)}</td>
                       <td>${escapeHtml(l.strProfessorName || 'TBA')}</td>
+                      <td>
+                        <button class="btn btn-outline btn-sm" onclick="window.JOIApp.registrarOpenTransfer(${l.lngLoadID})">Transfer</button>
+                      </td>
                     </tr>
                   `).join('')}
                 </tbody>
@@ -1599,7 +1942,7 @@
           </div>
         </div>
       `;
-    } else if (state.staffTab === 'finance') {
+    } else if (state.staffTab === 'finance-payments') {
       content = `
         <div class="kpi-grid">
           <div class="kpi-card">
@@ -1610,23 +1953,52 @@
           <div class="kpi-card">
             <div class="kpi-label">Verified QR Collections</div>
             <div class="kpi-value" style="color:#157347;">
-              ${formatPHP(ov.payments.filter((p) => p.strStatus === 'Paid / Verified').reduce((a, b) => a + b.curAmount, 0))}
+              ${formatPHP(ov.payments.filter((p) => p.strStatus === 'Paid / Verified').reduce((a, b) => a + Number(b.curAmount), 0))}
             </div>
-            <div class="kpi-sub">Via Dynamic/Static QR Ph </div>
+            <div class="kpi-sub">Verified Collections</div>
           </div>
           <div class="kpi-card">
             <div class="kpi-label">Active Promissory Notes</div>
             <div class="kpi-value">${ov.promissoryNotes.length}</div>
-            <div class="kpi-sub">Logged in Promissory 4Notes</div>
+            <div class="kpi-sub">Deferred Installment Registry</div>
           </div>
           <div class="kpi-card">
             <div class="kpi-label">Officially Enrolled Students</div>
             <div class="kpi-value">${ov.students.filter((s) => s.strEnrollmentStatus.includes('Officially Enrolled')).length}</div>
-            <div class="kpi-sub">Auto-tagged via </div>
+            <div class="kpi-sub">Cleared by Finance</div>
           </div>
         </div>
 
-        <!-- FR-006 & FR-008: Verify QR Payments -->
+        <div class="panel-card">
+          <div class="panel-header">
+            <h3>Student Balances &amp; Assessment Overview</h3>
+          </div>
+          <div class="panel-body">
+            <div class="data-table-wrap">
+              <table class="data-table">
+                <thead>
+                  <tr>
+                    <th>Student No.</th>
+                    <th>Student Name</th>
+                    <th>Enrollment Status</th>
+                    <th>Outstanding Balance</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  ${ov.students.map((s) => `
+                    <tr>
+                      <td><code>${escapeHtml(s.strStudentNo)}</code></td>
+                      <td><strong>${escapeHtml(s.strLastName)}, ${escapeHtml(s.strFirstName)}</strong></td>
+                      <td><span class="badge badge-navy">${escapeHtml(s.strEnrollmentStatus)}</span></td>
+                      <td><strong style="color:${Number(s.curOutstandingBalance) > 0 ? '#b45309' : '#157347'};">${formatPHP(s.curOutstandingBalance)}</strong></td>
+                    </tr>
+                  `).join('')}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+
         <div class="panel-card">
           <div class="panel-header">
             <h3>QR Payment Receipt Verification Queue</h3>
@@ -1679,7 +2051,6 @@
           </div>
         </div>
 
-        <!-- FR-005 & FR-008: Manual Paper Promissory Note Registry -->
         <div class="panel-card">
           <div class="panel-header">
             <h3>Manual Promissory Note Logging &amp; Deferred Schedule Registry</h3>
@@ -1692,12 +2063,12 @@
                   <label>Select Student</label>
                   <select id="pn-student-id">
                     ${ov.students.map((s) => `
-                      <option value="${s.lngStudentID}">${escapeHtml(s.strStudentNo)} — ${escapeHtml(s.strFirstName)} ${escapeHtml(s.strLastName)} — Balance: ${formatPHP(s.curOutstandingBalance)}</option>
+                      <option value="${s.lngStudentID}">${escapeHtml(s.strStudentNo)} &mdash; ${escapeHtml(s.strFirstName)} ${escapeHtml(s.strLastName)} &mdash; Balance: ${formatPHP(s.curOutstandingBalance)}</option>
                     `).join('')}
                   </select>
                 </div>
                 <div class="form-field">
-                  <label>Covered Deferred Amount — PHP</label>
+                  <label>Covered Deferred Amount &mdash; PHP</label>
                   <input id="pn-amount" type="number" step="0.01" value="19150.00" />
                 </div>
                 <div class="form-field">
@@ -1710,7 +2081,7 @@
                 </div>
               </div>
               <button class="btn btn-primary" onclick="window.JOIApp.financeLogPromissoryNote()">
-                Log Approved Promissory Note &amp; Tag "Officially Enrolled" / FR-008
+                Log Approved Promissory Note &amp; Tag "Officially Enrolled"
               </button>
             </div>
 
@@ -1745,18 +2116,18 @@
           </div>
         </div>
       `;
-    } else if (state.staffTab === 'faculty') {
+    } else if (state.staffTab === 'faculty-grades') {
       content = `
         <div class="alert-banner alert-info">
           <div>
             <strong>Faculty Instructional Dashboard:</strong>
-            View assigned teaching schedules, verify <strong>Officially Enrolled</strong> versus <strong>Conditionally Admitted (INC)</strong> students on real-time class rosters, and encode student grades for assigned subjects.
+            View your assigned teaching sections (<code>lngFacultyEmpID = ${escapeHtml(u.empId)}</code>), verify enrolled students, and encode grades or INC marks.
           </div>
         </div>
 
         <div class="panel-card">
           <div class="panel-header">
-            <h3>Assigned Teaching Schedules &amp; Section Capacities</h3>
+            <h3>My Assigned Sections &amp; Teaching Schedules</h3>
           </div>
           <div class="panel-body">
             <div class="data-table-wrap">
@@ -1769,12 +2140,13 @@
                     <th>Units</th>
                     <th>Schedule</th>
                     <th>Assigned Room</th>
-                    <th>Instructor</th>
                     <th>Enrolled / Capacity</th>
                   </tr>
                 </thead>
                 <tbody>
-                  ${ov.sections.map((s) => `
+                  ${ov.sections.length === 0 ? `
+                    <tr><td colspan="7" style="text-align:center;color:#64748b;padding:20px;">No sections are currently assigned to your faculty account.</td></tr>
+                  ` : ov.sections.map((s) => `
                     <tr>
                       <td><strong>${escapeHtml(s.strSubjectCode)}</strong></td>
                       <td>${escapeHtml(s.strSubjectTitle)}</td>
@@ -1782,7 +2154,6 @@
                       <td>${s.intUnits}</td>
                       <td>${escapeHtml(s.strSchedule)}</td>
                       <td>${escapeHtml(s.strRoom)}</td>
-                      <td>${escapeHtml(s.strProfessorName || 'TBA')}</td>
                       <td>
                         <span class="badge ${s.intEnrolledCount >= s.intMaxCapacity ? 'badge-danger' : 'badge-success'}">
                           ${s.intEnrolledCount} / ${s.intMaxCapacity}
@@ -1798,7 +2169,7 @@
 
         <div class="panel-card">
           <div class="panel-header">
-            <h3>Real-Time Class Roster &amp; Grade / INC Encoding</h3>
+            <h3>Assigned Class Roster &amp; Grade / INC Encoding</h3>
           </div>
           <div class="panel-body">
             <div class="data-table-wrap">
@@ -1808,13 +2179,15 @@
                     <th>Section &amp; Subject</th>
                     <th>Student No.</th>
                     <th>Student Name</th>
-                    <th>Admission / Enrollment Verification</th>
+                    <th>Enrollment Verification</th>
                     <th>Current Grade</th>
                     <th>Encode Grade / INC</th>
                   </tr>
                 </thead>
                 <tbody>
-                  ${ov.subjectLoads.map((l) => `
+                  ${ov.subjectLoads.length === 0 ? `
+                    <tr><td colspan="6" style="text-align:center;color:#64748b;padding:20px;">No enrolled students in your assigned sections yet.</td></tr>
+                  ` : ov.subjectLoads.map((l) => `
                     <tr>
                       <td><strong>${escapeHtml(l.strSubjectCode)}</strong> ${escapeHtml(l.strSectionName)}</td>
                       <td><code>${escapeHtml(l.strStudentNo)}</code></td>
@@ -1847,36 +2220,91 @@
           </div>
         </div>
       `;
-    } else if (state.staffTab === 'admin') {
+    } else if (state.staffTab === 'admin-dashboard') {
+      const cfg = ov.systemConfig || {
+        strActiveSemester: '1st Semester AY 2026-2027',
+        curDefaultPerUnitFee: 1850,
+        curDefaultMiscFee: 6850,
+        ysnApplicationsOpen: 1
+      };
       content = `
         <div class="panel-card">
           <div class="panel-header">
-            <h3>Role-Based Access Control Personnel Management — tblEmployees &amp; tblEmpJobPosition</h3>
+            <h3>System Configuration &amp; Academic Parameters</h3>
+            <span class="badge badge-navy">Admin Exclusive</span>
+          </div>
+          <div class="panel-body">
+            <div class="form-grid">
+              <div class="form-field">
+                <label>Active Semester Label</label>
+                <input id="cfg-semester" type="text" value="${escapeHtml(cfg.strActiveSemester)}" />
+              </div>
+              <div class="form-field">
+                <label>Default Per-Unit Tuition Fee (PHP)</label>
+                <input id="cfg-unit-fee" type="number" step="0.01" value="${Number(cfg.curDefaultPerUnitFee || 1850)}" />
+              </div>
+              <div class="form-field">
+                <label>Default Miscellaneous Fee (PHP)</label>
+                <input id="cfg-misc-fee" type="number" step="0.01" value="${Number(cfg.curDefaultMiscFee || 6850)}" />
+              </div>
+              <div class="form-field">
+                <label>Online Applications Portal</label>
+                <select id="cfg-apps-open">
+                  <option value="1" ${Number(cfg.ysnApplicationsOpen) !== 0 ? 'selected' : ''}>Open (Accepting Applicants)</option>
+                  <option value="0" ${Number(cfg.ysnApplicationsOpen) === 0 ? 'selected' : ''}>Closed</option>
+                </select>
+              </div>
+            </div>
+            <button class="btn btn-primary" onclick="window.JOIApp.adminSaveSystemConfig()">Save System Configuration</button>
+          </div>
+        </div>
+
+        <div class="panel-card">
+          <div class="panel-header">
+            <h3>Employee Account &amp; RBAC Management (tblEmployees)</h3>
           </div>
           <div class="panel-body">
             <div class="data-table-wrap" style="margin-bottom:18px;">
               <table class="data-table">
                 <thead>
                   <tr>
-                    <th>lngEmpID</th>
+                    <th>Emp ID</th>
                     <th>Employee Code</th>
                     <th>Full Name</th>
-                    <th>Job Position</th>
-                    <th>RBAC Access Role</th>
-                    <th>Department</th>
-                    <th>Authentication</th>
+                    <th>Email</th>
+                    <th>RBAC Role</th>
+                    <th>Status</th>
+                    <th>Actions</th>
                   </tr>
                 </thead>
                 <tbody>
                   ${ov.employees.map((e) => `
                     <tr>
                       <td><code>#${e.lngEmpID}</code></td>
-                      <td><code>${escapeHtml(e.strEmpCode)}</code></td>
-                      <td><strong>${escapeHtml(e.strEmpName)}</strong></td>
-                      <td>${escapeHtml(e.strEmpPosition)}</td>
-                      <td><span class="badge badge-navy">${escapeHtml(e.strAccess)}</span></td>
-                      <td>${escapeHtml(e.strDepartment)}</td>
-                      <td><span class="badge badge-success">Supabase Auth</span></td>
+                      <td>
+                        <input id="adm-code-${e.lngEmpID}" type="text" value="${escapeHtml(e.strEmpCode || '')}" style="width:110px;padding:4px 6px;border:1px solid #cbd5e1;border-radius:4px;font-size:12px;" />
+                      </td>
+                      <td><strong>${escapeHtml(e.strEmpName)}</strong><br/><small style="color:#64748b;">${escapeHtml(e.strEmpPosition || '')}</small></td>
+                      <td><small>${escapeHtml(e.strEmpEmail || 'N/A')}</small></td>
+                      <td>
+                        <select id="adm-role-${e.lngEmpID}" style="padding:4px 6px;border:1px solid #cbd5e1;border-radius:4px;font-size:12px;">
+                          ${['ADMIN', 'REGISTRAR', 'FINANCE', 'FACULTY'].map((r) => `
+                            <option value="${r}" ${e.strAccess === r ? 'selected' : ''}>${r}</option>
+                          `).join('')}
+                        </select>
+                      </td>
+                      <td>
+                        <select id="adm-active-${e.lngEmpID}" style="padding:4px 6px;border:1px solid #cbd5e1;border-radius:4px;font-size:12px;">
+                          <option value="1" ${e.ysnActive !== 0 ? 'selected' : ''}>Active</option>
+                          <option value="0" ${e.ysnActive === 0 ? 'selected' : ''}>Deactivated</option>
+                        </select>
+                      </td>
+                      <td>
+                        <div style="display:flex;gap:6px;flex-wrap:wrap;">
+                          <button class="btn btn-primary btn-sm" onclick="window.JOIApp.adminUpdateEmployee(${e.lngEmpID})">Save</button>
+                          <button class="btn btn-outline btn-sm" onclick="window.JOIApp.adminResetPassword('staff', ${e.lngEmpID})">Reset PW</button>
+                        </div>
+                      </td>
                     </tr>
                   `).join('')}
                 </tbody>
@@ -1884,15 +2312,19 @@
             </div>
 
             <div style="background:#f8fafc;padding:16px;border-radius:10px;border:1px solid #cbd5e1;">
-              <h4 style="font-size:13.5px;margin-bottom:10px;color:var(--joi-navy-dark);">Provision New Staff / Faculty Account in tblEmployees</h4>
+              <h4 style="font-size:13.5px;margin-bottom:10px;color:var(--joi-navy-dark);">Provision New Staff Account (ADM / REG / FIN / FAC)</h4>
               <div class="form-grid">
+                <div class="form-field">
+                  <label>Employee Code (Optional, auto-prefixed if blank)</label>
+                  <input id="adm-emp-code" type="text" placeholder="e.g. REG-002" />
+                </div>
                 <div class="form-field">
                   <label>Full Name</label>
                   <input id="adm-emp-name" type="text" placeholder="e.g. Engr. Beatrice L. Villanueva" />
                 </div>
                 <div class="form-field">
-                  <label>Email — Supabase Auth invitation</label>
-                  <input id="adm-emp-email" type="email" placeholder="employee@example.edu" autocomplete="email" />
+                  <label>Email &mdash; Supabase Auth invitation</label>
+                  <input id="adm-emp-email" type="email" placeholder="employee@joi.edu.ph" autocomplete="email" />
                 </div>
                 <div class="form-field">
                   <label>Job Position</label>
@@ -1906,41 +2338,45 @@
                     <option value="FACULTY">FACULTY</option>
                     <option value="REGISTRAR">REGISTRAR</option>
                     <option value="FINANCE">FINANCE</option>
-                    <option value="DEAN">DEAN</option>
                     <option value="ADMIN">ADMIN</option>
                   </select>
                 </div>
+                <div class="form-field">
+                  <label>Department</label>
+                  <input id="adm-emp-dept" type="text" value="Academic Affairs" />
+                </div>
               </div>
-              <button class="btn btn-primary" onclick="window.JOIApp.adminCreateEmployee()">Invite Staff Account</button>
+              <button class="btn btn-primary" onclick="window.JOIApp.adminCreateEmployee()">Invite &amp; Create Staff Account</button>
             </div>
           </div>
         </div>
 
         <div class="panel-card">
           <div class="panel-header">
-            <h3>Database Backup &amp; Disaster Recovery</h3>
-            <span class="badge badge-info">Backups are managed in the Supabase Dashboard</span>
+            <h3>Student Account Management (Password Reset &amp; Status)</h3>
           </div>
           <div class="panel-body">
             <div class="data-table-wrap">
               <table class="data-table">
                 <thead>
                   <tr>
-                    <th>Backup ID</th>
-                    <th>Backup Snapshot</th>
-                    <th>Backup Mode</th>
-                    <th>Snapshot Size</th>
-                    <th>Timestamp</th>
+                    <th>Student No.</th>
+                    <th>Student Name</th>
+                    <th>Email</th>
+                    <th>Enrollment Status</th>
+                    <th>Admin Action</th>
                   </tr>
                 </thead>
                 <tbody>
-                  ${ov.backups.map((bk) => `
+                  ${ov.students.map((s) => `
                     <tr>
-                      <td><code>#${bk.lngBackupID}</code></td>
-                      <td><code>${escapeHtml(bk.strBackupFileName)}</code></td>
-                      <td><span class="badge badge-success">${escapeHtml(bk.strTriggerType)}</span></td>
-                      <td>${escapeHtml(bk.strSizeKB)}</td>
-                      <td>${escapeHtml(bk.dteCreated)}</td>
+                      <td><code>${escapeHtml(s.strStudentNo)}</code></td>
+                      <td><strong>${escapeHtml(s.strLastName)}, ${escapeHtml(s.strFirstName)}</strong></td>
+                      <td><small>${escapeHtml(s['hypE-mailAddress'] || 'N/A')}</small></td>
+                      <td><span class="badge badge-navy">${escapeHtml(s.strEnrollmentStatus)}</span></td>
+                      <td>
+                        <button class="btn btn-outline btn-sm" onclick="window.JOIApp.adminResetPassword('student', ${s.lngStudentID})">Reset Password</button>
+                      </td>
                     </tr>
                   `).join('')}
                 </tbody>
@@ -1949,33 +2385,31 @@
           </div>
         </div>
       `;
-    } else if (state.staffTab === 'database') {
+    } else if (state.staffTab === 'admin-database') {
       const tableMap = {
+        tblEmployees: ov.employees,
         tblStudentInformation: ov.students,
         tblCourseList: ov.courses,
-        tblLINKStudent_Course: ov.studentCourseLinks,
+        tblSubjectSections: ov.sections,
+        tblPayments: ov.payments,
+        tblAdmissionDocuments: ov.documents,
         tblContacts: ov.contacts,
-        tblContactType: ov.contactTypes,
-        tblEmployees: ov.employees,
-        tblEmpJobPosition: ov.positions
+        tblDatabaseBackups: ov.backups
       };
-      const rows = tableMap[state.erSelectedTable] || [];
+      const rows = tableMap[state.adminSelectedTable] || [];
       const cols = rows.length > 0 ? Object.keys(rows[0]) : [];
 
       content = `
         <div class="panel-card">
           <div class="panel-header">
-            <h3>Relational Database Schema &amp; Live Table Inspector</h3>
+            <h3>Database Management &amp; Live Supabase Table Inspector</h3>
+            <span class="badge badge-info">Backups managed in Supabase Dashboard</span>
           </div>
           <div class="panel-body">
-            <div style="text-align:center;margin-bottom:18px;background:#f8fafc;padding:12px;border-radius:10px;border:1px solid #cbd5e1;">
-              <img src="/assets/er_diagram.png" alt="Database Relationships Diagram" style="max-width:100%;max-height:340px;border-radius:6px;" />
-            </div>
-
             <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px;">
               ${Object.keys(tableMap).map((tName) => `
-                <button class="btn ${state.erSelectedTable === tName ? 'btn-primary' : 'btn-outline'} btn-sm" onclick="window.JOIApp.selectErTable('${tName}')">
-                  ${tName} — ${tableMap[tName].length}
+                <button class="btn ${state.adminSelectedTable === tName ? 'btn-primary' : 'btn-outline'} btn-sm" onclick="window.JOIApp.selectAdminTable('${tName}')">
+                  ${tName} (${tableMap[tName].length})
                 </button>
               `).join('')}
             </div>
@@ -1988,7 +2422,9 @@
                   </tr>
                 </thead>
                 <tbody>
-                  ${rows.map((r) => `
+                  ${rows.length === 0 ? `
+                    <tr><td colspan="${Math.max(1, cols.length)}" style="text-align:center;color:#64748b;padding:20px;">No rows in ${escapeHtml(state.adminSelectedTable)}.</td></tr>
+                  ` : rows.map((r) => `
                     <tr>
                       ${cols.map((c) => `<td>${escapeHtml(typeof r[c] === 'object' ? JSON.stringify(r[c]) : r[c])}</td>`).join('')}
                     </tr>
@@ -2007,8 +2443,8 @@
           <div class="portal-brand">
             <img src="/assets/crest.png" alt="JOI Crest" />
             <div>
-              <h1>Jewel of Intellect Academy &mdash; Administrative &amp; Academic Portal</h1>
-              <p>Signed in as <strong>${escapeHtml(u.name)}</strong> ${escapeHtml(u.position)} &bull; Role: <code>${escapeHtml(u.role)}</code></p>
+              <h1>Jewel of Intellect Academy &mdash; School Access Portal</h1>
+              <p>Signed in as <strong>${escapeHtml(u.name)}</strong> (${escapeHtml(u.empCode || '')}) &bull; ${escapeHtml(u.position || u.role)} &bull; Role: <code>${escapeHtml(u.role)}</code></p>
             </div>
           </div>
           <div class="portal-user-controls">
@@ -2075,6 +2511,14 @@
     },
     clearAuth() {
       state.authInput.identifier = '';
+      state.authInput.password = '';
+      state.authInput.staffEmail = '';
+      render();
+    },
+    verifyStaffEmployeeId,
+    resetStaffVerification() {
+      state.authInput.staffVerified = null;
+      state.authInput.staffEmail = '';
       state.authInput.password = '';
       render();
     },
@@ -2250,6 +2694,8 @@
 
     // Staff Portal actions
     setStaffTab(tabId) {
+      const allowed = ROLE_TABS[state.currentUser?.role] || [];
+      if (!allowed.some((t) => t.id === tabId)) return;
       state.staffTab = tabId;
       render();
     },
@@ -2257,19 +2703,15 @@
       state.masterListSectionFilter = val;
       render();
     },
-    selectErTable(tName) {
-      state.erSelectedTable = tName;
+    selectAdminTable(tName) {
+      state.adminSelectedTable = tName;
       render();
     },
     async registrarReviewDoc(docId, status) {
       try {
         const res = await apiFetch('/api/registrar/review-document', {
           method: 'POST',
-          body: JSON.stringify({
-            docId,
-            status,
-            empId: state.currentUser?.empId || 2
-          })
+          body: JSON.stringify({ docId, status })
         });
         await refreshStaffPortal();
         showToast(res.message, 'success');
@@ -2283,10 +2725,119 @@
           method: 'POST',
           body: JSON.stringify({
             studentId,
-            releasePreReg: Boolean(releasePreReg),
-            empId: state.currentUser?.empId || 5
+            releasePreReg: Boolean(releasePreReg)
           })
         });
+        await refreshStaffPortal();
+        showToast(res.message, 'success');
+      } catch (err) {
+        showToast(err.message, 'error');
+      }
+    },
+    async registrarUpdateStudentStatus(studentId) {
+      try {
+        const sel = document.getElementById(`reg-stu-status-${studentId}`);
+        const enrollmentStatus = sel ? sel.value : '';
+        const res = await apiFetch('/api/registrar/student-status', {
+          method: 'POST',
+          body: JSON.stringify({ studentId, enrollmentStatus })
+        });
+        await refreshStaffPortal();
+        showToast(res.message, 'success');
+      } catch (err) {
+        showToast(err.message, 'error');
+      }
+    },
+    registrarEditSection(sectionId) {
+      const sec = (state.staffOverview?.sections || []).find((s) => Number(s.lngSectionID) === Number(sectionId));
+      state.registrarEditSection = sec || null;
+      render();
+    },
+    registrarClearSectionForm() {
+      state.registrarEditSection = null;
+      render();
+    },
+    async registrarSaveSection() {
+      try {
+        const payload = {
+          sectionId: state.registrarEditSection?.lngSectionID || undefined,
+          courseId: Number(document.getElementById('sec-course-id').value),
+          subjectCode: document.getElementById('sec-subj-code').value,
+          subjectTitle: document.getElementById('sec-subj-title').value,
+          sectionName: document.getElementById('sec-name').value,
+          units: Number(document.getElementById('sec-units').value),
+          schedule: document.getElementById('sec-schedule').value,
+          room: document.getElementById('sec-room').value,
+          facultyEmpId: document.getElementById('sec-faculty-id').value,
+          prerequisiteCode: document.getElementById('sec-prereq').value,
+          maxCapacity: Number(document.getElementById('sec-capacity').value),
+          perUnitFee: Number(document.getElementById('sec-unit-fee').value),
+          labFee: Number(document.getElementById('sec-lab-fee').value)
+        };
+        const res = await apiFetch('/api/registrar/section', {
+          method: 'POST',
+          body: JSON.stringify(payload)
+        });
+        state.registrarEditSection = null;
+        await refreshStaffPortal();
+        showToast(res.message, 'success');
+      } catch (err) {
+        showToast(err.message, 'error');
+      }
+    },
+    async registrarSaveCourse() {
+      try {
+        const courseCode = document.getElementById('reg-course-code').value;
+        const courseDescription = document.getElementById('reg-course-desc').value;
+        const courseCost = document.getElementById('reg-course-cost').value;
+        const durationYears = document.getElementById('reg-course-years').value;
+        const res = await apiFetch('/api/registrar/course', {
+          method: 'POST',
+          body: JSON.stringify({ courseCode, courseDescription, courseCost, durationYears })
+        });
+        await refreshStaffPortal();
+        showToast(res.message, 'success');
+      } catch (err) {
+        showToast(err.message, 'error');
+      }
+    },
+    async registrarAssignStudentSection() {
+      try {
+        const studentId = document.getElementById('assign-student-id').value;
+        const sectionId = document.getElementById('assign-section-id').value;
+        const res = await apiFetch('/api/registrar/assign-student-section', {
+          method: 'POST',
+          body: JSON.stringify({ studentId, sectionId })
+        });
+        await refreshStaffPortal();
+        showToast(res.message, 'success');
+      } catch (err) {
+        showToast(err.message, 'error');
+      }
+    },
+    registrarOpenTransfer(loadId) {
+      const load = (state.staffOverview?.subjectLoads || []).find((l) => Number(l.lngLoadID) === Number(loadId));
+      state.registrarTransferLoad = load || null;
+      render();
+    },
+    registrarCancelTransfer() {
+      state.registrarTransferLoad = null;
+      render();
+    },
+    async registrarTransferStudent() {
+      try {
+        const load = state.registrarTransferLoad;
+        if (!load) return;
+        const toSectionId = document.getElementById('transfer-to-section-id').value;
+        const res = await apiFetch('/api/registrar/transfer-student', {
+          method: 'POST',
+          body: JSON.stringify({
+            studentId: load.lngStudentID,
+            fromLoadId: load.lngLoadID,
+            toSectionId
+          })
+        });
+        state.registrarTransferLoad = null;
         await refreshStaffPortal();
         showToast(res.message, 'success');
       } catch (err) {
@@ -2297,11 +2848,7 @@
       try {
         const res = await apiFetch('/api/finance/verify-payment', {
           method: 'POST',
-          body: JSON.stringify({
-            paymentId,
-            status,
-            empId: state.currentUser?.empId || 3
-          })
+          body: JSON.stringify({ paymentId, status })
         });
         await refreshStaffPortal();
         showToast(res.message, 'success');
@@ -2321,8 +2868,7 @@
             studentId,
             coveredAmount,
             deferredDueDate,
-            agreementTerms,
-            empId: state.currentUser?.empId || 3
+            agreementTerms
           })
         });
         await refreshStaffPortal();
@@ -2337,11 +2883,23 @@
         const grade = sel ? sel.value : '1.25';
         const res = await apiFetch('/api/faculty/encode-grade', {
           method: 'POST',
-          body: JSON.stringify({
-            loadId,
-            grade,
-            empId: state.currentUser?.empId || 4
-          })
+          body: JSON.stringify({ loadId, grade })
+        });
+        await refreshStaffPortal();
+        showToast(res.message, 'success');
+      } catch (err) {
+        showToast(err.message, 'error');
+      }
+    },
+    async adminSaveSystemConfig() {
+      try {
+        const activeSemester = document.getElementById('cfg-semester').value;
+        const defaultPerUnitFee = document.getElementById('cfg-unit-fee').value;
+        const defaultMiscFee = document.getElementById('cfg-misc-fee').value;
+        const applicationsOpen = document.getElementById('cfg-apps-open').value;
+        const res = await apiFetch('/api/admin/system-config', {
+          method: 'POST',
+          body: JSON.stringify({ activeSemester, defaultPerUnitFee, defaultMiscFee, applicationsOpen })
         });
         await refreshStaffPortal();
         showToast(res.message, 'success');
@@ -2351,14 +2909,16 @@
     },
     async adminCreateEmployee() {
       try {
+        const empCode = document.getElementById('adm-emp-code').value;
         const empName = document.getElementById('adm-emp-name').value;
         const email = document.getElementById('adm-emp-email').value;
         const positionId = document.getElementById('adm-emp-pos').value;
         const accessRole = document.getElementById('adm-emp-role').value;
+        const department = document.getElementById('adm-emp-dept').value;
         if (!empName || !email) return showToast('Please enter the employee full name and email.', 'error');
         const res = await apiFetch('/api/admin/employee', {
           method: 'POST',
-          body: JSON.stringify({ empName, email, positionId, accessRole })
+          body: JSON.stringify({ empCode, empName, email, positionId, accessRole, department })
         });
         await refreshStaffPortal();
         showToast(res.message, 'success');
@@ -2366,6 +2926,46 @@
         showToast(err.message, 'error');
       }
     },
+    async adminUpdateEmployee(empId) {
+      try {
+        const empCode = document.getElementById(`adm-code-${empId}`).value;
+        const accessRole = document.getElementById(`adm-role-${empId}`).value;
+        const ysnActive = document.getElementById(`adm-active-${empId}`).value;
+        const res = await apiFetch('/api/admin/manage-account', {
+          method: 'POST',
+          body: JSON.stringify({
+            accountType: 'staff',
+            accountId: empId,
+            action: 'update',
+            empCode,
+            accessRole,
+            ysnActive
+          })
+        });
+        await refreshStaffPortal();
+        showToast(res.message, 'success');
+      } catch (err) {
+        showToast(err.message, 'error');
+      }
+    },
+    async adminResetPassword(accountType, accountId) {
+      const newPassword = window.prompt('Enter new password (minimum 8 characters):');
+      if (!newPassword) return;
+      try {
+        const res = await apiFetch('/api/admin/manage-account', {
+          method: 'POST',
+          body: JSON.stringify({
+            accountType,
+            accountId,
+            action: 'reset-password',
+            newPassword
+          })
+        });
+        showToast(res.message, 'success');
+      } catch (err) {
+        showToast(err.message, 'error');
+      }
+    }
   };
 
   // Initialize portal on DOM load
