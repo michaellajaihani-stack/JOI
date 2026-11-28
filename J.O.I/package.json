@@ -5,7 +5,8 @@
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
-    "migrate:sqlite": "node migrate-sqlite-to-supabase.js"
+    "migrate:sqlite": "node migrate-sqlite-to-supabase.js",
+    "seed:staff": "node seed-staff-samples.js"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.119.2",
